@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use pamin_kit::schemars::JsonSchema;
 use pamin_kit::{
-    Audience, Body, Content, Ctx, Feature, Hardware, Hints, Icon, Kit, Local, Looks, Manifest,
-    Message, Module, Ops, Role, Routing, Space,
+    Audience, Body, Completing, Content, Ctx, Feature, Hardware, Hints, Icon, Kit, Local, Looks,
+    Manifest, Message, Module, Ops, Role, Routing, Space,
 };
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +74,9 @@ pub struct Sure {
 pub struct Greet {
     /// Who to greet.
     name: String,
+    /// How, such as `Hello`.
+    #[serde(default)]
+    greeting: String,
 }
 
 /// Waits, then says the text back.
@@ -229,20 +232,46 @@ impl Module for Echo {
             |_: Arc<Self>, _: Ctx, greet: Greet| async move {
                 Ok::<_, String>(vec![Message::text(
                     Role::User,
-                    format!("Say hello to {} with echo_say.", greet.name),
+                    match greet.greeting.as_str() {
+                        "" => format!("Say hello to {} with echo_say.", greet.name),
+                        greeting => format!("Say {greeting} to {} with echo_say.", greet.name),
+                    },
                 )])
             },
         )
         .complete(
             "echo_greet",
             "name",
-            |_: Arc<Self>, _: Ctx, typed: String| async move {
+            |_: Arc<Self>, _: Ctx, completing: Completing| async move {
                 let names = ["Ada", "Alan", "Grace"];
                 Ok::<_, String>(
                     names
                         .iter()
-                        .filter(|name| name.starts_with(&typed))
+                        .filter(|name| name.starts_with(&completing.typed))
                         .map(|name| name.to_string())
+                        .collect(),
+                )
+            },
+        )
+        .complete(
+            "echo_greet",
+            "greeting",
+            // The greetings suggested depend on who is greeted.
+            |_: Arc<Self>, _: Ctx, completing: Completing| async move {
+                let formal = completing
+                    .given
+                    .get("name")
+                    .is_some_and(|name| name == "Ada");
+                let greetings: &[&str] = if formal {
+                    &["Good day"]
+                } else {
+                    &["Hello", "Hi"]
+                };
+                Ok::<_, String>(
+                    greetings
+                        .iter()
+                        .filter(|greeting| greeting.starts_with(&completing.typed))
+                        .map(|greeting| greeting.to_string())
                         .collect(),
                 )
             },

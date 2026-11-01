@@ -194,9 +194,13 @@ async fn prompts_are_listed_filled_and_completed() {
 
     let prompts = client.list_all_prompts().await.unwrap();
     assert_eq!(prompts[0].name, "echo_greet");
-    let argument = &prompts[0].arguments.as_ref().unwrap()[0];
-    assert_eq!(argument.name, "name");
-    assert_eq!(argument.required, Some(true));
+    let required = |name: &str| {
+        let arguments = prompts[0].arguments.as_ref().unwrap();
+        let argument = arguments.iter().find(|a| a.name == name).unwrap();
+        argument.required
+    };
+    assert_eq!(required("name"), Some(true));
+    assert_eq!(required("greeting"), Some(false));
 
     let mut arguments = serde_json::Map::new();
     arguments.insert("name".into(), json!("Ada"));
@@ -217,6 +221,21 @@ async fn prompts_are_listed_filled_and_completed() {
         .await
         .unwrap();
     assert_eq!(completed.completion.values, ["Ada", "Alan"]);
+
+    let greeting = |name: &str| {
+        let mut given = rmcp::model::CompletionContext::new();
+        given.arguments = Some([("name".to_owned(), name.to_owned())].into());
+        let mut request = rmcp::model::CompleteRequestParams::new(
+            rmcp::model::Reference::for_prompt("echo_greet"),
+            rmcp::model::ArgumentInfo::new("greeting", ""),
+        );
+        request.context = Some(given);
+        request
+    };
+    let formal = client.complete(greeting("Ada")).await.unwrap();
+    assert_eq!(formal.completion.values, ["Good day"]);
+    let casual = client.complete(greeting("Alan")).await.unwrap();
+    assert_eq!(casual.completion.values, ["Hello", "Hi"]);
     client.cancel().await.unwrap();
 }
 
