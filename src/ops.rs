@@ -62,12 +62,21 @@ impl From<NeedsInput> for String {
     }
 }
 
-/// The answers a call brought and the questions it asked, for the one
-/// call running in this tokio task: kept task-local so that a call that
-/// asks nothing allocates nothing for it.
+/// The answers a call brought and what it did besides its result, for the
+/// one call running in this tokio task: kept task-local so that a call that
+/// asks and changes nothing allocates nothing for it.
 pub(crate) struct Input {
     answers: Option<BTreeMap<String, Value>>,
-    asked: Vec<Ask>,
+    effects: Effects,
+}
+
+/// What a call did besides returning.
+#[derive(Default)]
+pub(crate) struct Effects {
+    /// The questions it asked the user.
+    pub asked: Vec<Ask>,
+    /// The resources it changed, by URI.
+    pub updated: Vec<String>,
 }
 
 tokio::task_local! {
@@ -75,20 +84,20 @@ tokio::task_local! {
 }
 
 /// Runs `work` with `answers` available to [`Ctx::ask`], and returns what
-/// it asked besides its output.
+/// it asked and changed besides its output.
 pub(crate) async fn with_input<F: Future>(
     answers: Option<BTreeMap<String, Value>>,
     work: F,
-) -> (F::Output, Vec<Ask>) {
+) -> (F::Output, Effects) {
     let input = RefCell::new(Input {
         answers,
-        asked: Vec::new(),
+        effects: Effects::default(),
     });
     INPUT
         .scope(input, async {
             let output = work.await;
-            let asked = INPUT.with(|input| std::mem::take(&mut input.borrow_mut().asked));
-            (output, asked)
+            let effects = INPUT.with(|input| std::mem::take(&mut input.borrow_mut().effects));
+            (output, effects)
         })
         .await
 }
@@ -174,7 +183,7 @@ impl Ctx {
                 // Not answered yet, or answered in a form that does not
                 // parse: ask.
                 None => {
-                    input.asked.push(Ask {
+                    input.effects.asked.push(Ask {
                         key: key.to_owned(),
                         message: message.to_owned(),
                         schema: JsonObject::clone(&schema_for_type::<T>()),
@@ -185,6 +194,13 @@ impl Ctx {
         });
         // Outside a kit call there is nobody to ask.
         answer.unwrap_or(Err(NeedsInput))
+    }
+
+    /// Says the resource at `uri` changed, so clients listening for it in
+    /// this space are told once the call ends.
+    pub fn updated(&self, uri: impl Into<String>) {
+        // Outside a kit call there is nobody to tell.
+        let _ = INPUT.try_with(|input| input.borrow_mut().effects.updated.push(uri.into()));
     }
 
     /// Tells the caller how far the operation is: `done` of `total`, if the

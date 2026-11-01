@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 use serde_json::Value;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::module::{Manifest, Module};
@@ -37,6 +38,8 @@ struct Core<M> {
     ops: Ops<M>,
     /// Which resource a URI reads: an index into `ops.resources`.
     routes: matchit::Router<usize>,
+    /// Resource changes, for the clients listening in this process.
+    changes: broadcast::Sender<Changed>,
     /// Tasks running in this process, to stop when a caller cancels one.
     running: Mutex<HashMap<String, CancellationToken>>,
 }
@@ -73,6 +76,7 @@ impl<M: Module, I: Identity> Kit<M, I> {
                 module: Arc::new(module),
                 ops,
                 routes,
+                changes: broadcast::channel(CHANGES).0,
                 running: Mutex::default(),
             },
             identity,
@@ -476,7 +480,13 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         }
     }
 
-    async fn identify(&self, bearer: Option<&str>) -> Result<Arc<Space>, CallError> {
+    /// Resource changes from now on, in every space: the listener keeps
+    /// its own.
+    pub(crate) fn changes(&self) -> broadcast::Receiver<Changed> {
+        self.core.changes.subscribe()
+    }
+
+    pub(crate) async fn identify(&self, bearer: Option<&str>) -> Result<Arc<Space>, CallError> {
         self.identity
             .identify(bearer)
             .await
@@ -535,11 +545,19 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     {
         let space = ctx.shared_space();
         let started = Instant::now();
-        let (result, asked) = with_input(answers, work(ctx)).await;
+        let (result, effects) = with_input(answers, work(ctx)).await;
+        // Changes happened whether or not the call then failed. Nobody
+        // listening is not an error.
+        for uri in effects.updated {
+            let _ = self.core.changes.send(Changed {
+                space: space.clone(),
+                uri,
+            });
+        }
         let result = match result {
             Ok(value) => Ok(value),
             // It stopped to ask the user: not a failure, a question.
-            Err(_) if !asked.is_empty() => Err(Halt::Input(asked)),
+            Err(_) if !effects.asked.is_empty() => Err(Halt::Input(effects.asked)),
             Err(message) => Err(Halt::Failed(message)),
         };
         self.metering.record(
@@ -596,6 +614,16 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             }
         }
     }
+}
+
+/// How many changes a slow listener may fall behind before it skips some.
+const CHANGES: usize = 1024;
+
+/// A resource that changed, in the space whose call changed it.
+#[derive(Clone, Debug)]
+pub(crate) struct Changed {
+    pub space: Arc<Space>,
+    pub uri: String,
 }
 
 /// Why an operation returned no result.
