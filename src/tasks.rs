@@ -28,6 +28,9 @@ pub struct StoredTask {
     pub space: Space,
     pub operation: String,
     pub state: TaskState,
+    /// What the operation last reported while working.
+    #[serde(default)]
+    pub status: Option<String>,
     pub created_at: SystemTime,
     pub updated_at: SystemTime,
 }

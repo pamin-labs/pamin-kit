@@ -99,3 +99,24 @@ async fn the_local_project_is_the_working_directory() {
     let here = std::env::current_dir().unwrap().canonicalize().unwrap();
     assert_eq!(space.project, here.to_string_lossy());
 }
+
+#[tokio::test]
+async fn cancelling_a_task_reaches_its_operation() {
+    let recorder = Recorder::default();
+    let kit = Arc::new(Kit::new(Echo, Local::new("notes")).with_metering(recorder.clone()));
+    let wait = args(json!({"text": "later", "millis": 2000}));
+    let task = kit.start("echo_wait", None, wait).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Progress shows while it works.
+    let working = kit.task(None, &task.id).await.unwrap();
+    assert!(working.status.unwrap().ends_with("waiting"));
+
+    kit.cancel(None, &task.id).await.unwrap();
+    // The operation sees the cancellation at its next step, long before its
+    // two seconds are up, and stops with an error.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(*recorder.0.lock().unwrap(), [("echo_wait", false)]);
+    let cancelled = kit.task(None, &task.id).await.unwrap();
+    assert_eq!(cancelled.state, pamin_kit::TaskState::Cancelled);
+}

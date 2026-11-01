@@ -10,6 +10,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
+use tokio_util::sync::CancellationToken;
 
 use crate::seams::{Feature, Space};
 
@@ -17,20 +18,64 @@ use crate::seams::{Feature, Space};
 pub type JsonObject = Map<String, Value>;
 
 /// What an operation knows about its call besides its arguments.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Ctx {
     space: Arc<Space>,
+    cancel: CancellationToken,
+    progress: Option<Arc<dyn Progress>>,
+}
+
+/// Where an operation's progress goes: a progress notification to the
+/// client, or a task's status. Set by whoever runs the operation.
+pub(crate) trait Progress: Send + Sync {
+    fn report(
+        &self,
+        done: f64,
+        total: Option<f64>,
+        message: Option<String>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
 
 impl Ctx {
-    pub(crate) fn new(space: Arc<Space>) -> Self {
-        Self { space }
+    pub(crate) fn new(
+        space: Arc<Space>,
+        cancel: CancellationToken,
+        progress: Option<Arc<dyn Progress>>,
+    ) -> Self {
+        Self {
+            space,
+            cancel,
+            progress,
+        }
     }
 
     /// The tenant, end user and project the call works on, as the identity
     /// seam resolved them.
     pub fn space(&self) -> &Space {
         &self.space
+    }
+
+    /// Whether the caller cancelled the call. An operation checks this
+    /// between steps and stops where its state is whole; the kit never
+    /// stops it half way.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
+
+    /// Completes when the caller cancels the call, for an operation that
+    /// waits on something it can abandon.
+    pub async fn cancelled(&self) {
+        self.cancel.cancelled().await
+    }
+
+    /// Tells the caller how far the operation is: `done` of `total`, if the
+    /// total is known. A no-op for a caller that asked for no progress.
+    pub async fn progress(&self, done: f64, total: Option<f64>, message: Option<&str>) {
+        if let Some(progress) = &self.progress {
+            progress
+                .report(done, total, message.map(str::to_owned))
+                .await;
+        }
     }
 }
 

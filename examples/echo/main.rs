@@ -46,9 +46,18 @@ impl Echo {
         })
     }
 
-    async fn wait(&self, space: &Space, wait: Wait) -> Result<Said, String> {
-        tokio::time::sleep(std::time::Duration::from_millis(wait.millis)).await;
-        self.say(space, Say { text: wait.text }).await
+    /// Waits in ten steps, reporting each, and stops early when cancelled.
+    async fn wait(&self, ctx: &Ctx, wait: Wait) -> Result<Said, String> {
+        const STEPS: u64 = 10;
+        for step in 0..STEPS {
+            if ctx.is_cancelled() {
+                return Err("cancelled".into());
+            }
+            ctx.progress(step as f64, Some(STEPS as f64), Some("waiting"))
+                .await;
+            tokio::time::sleep(std::time::Duration::from_millis(wait.millis / STEPS)).await;
+        }
+        self.say(ctx.space(), Say { text: wait.text }).await
     }
 }
 
@@ -80,7 +89,7 @@ impl Module for Echo {
         .task(
             "echo_wait",
             Feature::Core,
-            |m: Arc<Self>, ctx: Ctx, a: Wait| async move { m.wait(ctx.space(), a).await },
+            |m: Arc<Self>, ctx: Ctx, a: Wait| async move { m.wait(&ctx, a).await },
         )
         .app("echo_say", "ui://echo/said", include_str!("said.html"))
         .hints(
