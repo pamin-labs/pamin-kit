@@ -5,8 +5,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use rmcp::handler::server::common::schema_for_type;
 use schemars::JsonSchema;
-use schemars::generate::SchemaSettings;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
@@ -95,8 +95,8 @@ impl<M: Send + Sync + 'static> Ops<M> {
         handler: F,
     ) -> &mut Self
     where
-        A: DeserializeOwned + JsonSchema,
-        R: Serialize + JsonSchema,
+        A: DeserializeOwned + JsonSchema + 'static,
+        R: Serialize + JsonSchema + 'static,
         E: std::fmt::Display,
         F: Fn(Arc<M>, Ctx, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<R, E>> + Send + 'static,
@@ -114,8 +114,8 @@ impl<M: Send + Sync + 'static> Ops<M> {
         handler: F,
     ) -> &mut Self
     where
-        A: DeserializeOwned + JsonSchema,
-        R: Serialize + JsonSchema,
+        A: DeserializeOwned + JsonSchema + 'static,
+        R: Serialize + JsonSchema + 'static,
         E: std::fmt::Display,
         F: Fn(Arc<M>, Ctx, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<R, E>> + Send + 'static,
@@ -158,8 +158,8 @@ impl<M: Send + Sync + 'static> Ops<M> {
         handler: F,
     ) -> &mut Self
     where
-        A: DeserializeOwned + JsonSchema,
-        R: Serialize + JsonSchema,
+        A: DeserializeOwned + JsonSchema + 'static,
+        R: Serialize + JsonSchema + 'static,
         E: std::fmt::Display,
         F: Fn(Arc<M>, Ctx, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<R, E>> + Send + 'static,
@@ -168,16 +168,19 @@ impl<M: Send + Sync + 'static> Ops<M> {
             self.list.iter().all(|op| op.tool.name != name),
             "operation {name} is registered twice"
         );
-        let mut input = schema::<A>();
+        // rmcp generates JSON Schema 2020-12, as MCP requires.
+        let mut input = JsonObject::clone(&schema_for_type::<A>());
         assert!(
             is_object(&input),
             "the arguments of {name} must be a struct"
         );
         let description = take_text(&mut input);
-        let output = Some(schema::<R>()).filter(is_object).map(|mut output| {
-            take_text(&mut output);
-            Arc::new(output)
-        });
+        let output = Some(JsonObject::clone(&schema_for_type::<R>()))
+            .filter(is_object)
+            .map(|mut output| {
+                take_text(&mut output);
+                Arc::new(output)
+            });
         let handler = Arc::new(handler);
         let call: Handler<M> = Box::new(move |module, ctx, arguments| {
             let handler = handler.clone();
@@ -203,18 +206,6 @@ impl<M: Send + Sync + 'static> Ops<M> {
             call,
         });
         self
-    }
-}
-
-/// `T`'s JSON Schema 2020-12, as MCP requires.
-fn schema<T: JsonSchema>() -> JsonObject {
-    let root = SchemaSettings::draft2020_12()
-        .into_generator()
-        .into_root_schema_for::<T>();
-    match root.to_value() {
-        Value::Object(object) => object,
-        // `true` or `false`: says nothing about the shape, so not an object.
-        _ => JsonObject::new(),
     }
 }
 
