@@ -16,11 +16,11 @@ use rmcp::model::{
     TaskPayload, TaskStatus, ToolAnnotations,
 };
 use rmcp::model::{
-    ClientCapabilities, CompleteRequestParams, CompleteResult, CompletionInfo, ElicitRequest,
-    ElicitRequestParams, ElicitationSchema, GetPromptRequestParams, GetPromptResponse,
-    GetPromptResult, InputRequest, InputRequests, InputRequiredResult, InputResponses,
-    ListPromptsResult, ProgressNotificationParam, ProgressToken, PromptMessage, ProtocolVersion,
-    UpdateTaskParams,
+    ClientCapabilities, ClientResult, CompleteRequestParams, CompleteResult, CompletionInfo,
+    ElicitRequest, ElicitRequestParams, ElicitationSchema, GetPromptRequestParams,
+    GetPromptResponse, GetPromptResult, InputRequest, InputRequests, InputRequiredResult,
+    InputResponses, ListPromptsResult, ProgressNotificationParam, ProgressToken, PromptMessage,
+    ProtocolVersion, ServerRequest, UpdateTaskParams,
 };
 use rmcp::model::{
     ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ResourcesCapability,
@@ -755,11 +755,22 @@ where
         let given = answers.get_or_insert_with(InputResponses::new);
         for ask in asked {
             let (key, form) = form(ask).map_err(|error| CallError::Failed(error.message.into()))?;
-            let answer = context
-                .peer
-                .create_elicitation(form)
-                .await
-                .map_err(|error| CallError::Failed(format!("asking the user failed: {error}")))?;
+            // The request rmcp's `elicitation` feature would send, without the
+            // URL parser it brings for nothing the kit uses.
+            let asking = ServerRequest::ElicitRequest(ElicitRequest::new(form));
+            let answer = match context.peer.send_request(asking).await {
+                Ok(ClientResult::ElicitResult(answer)) => answer,
+                Ok(_) => {
+                    return Err(CallError::Failed(
+                        "the client answered something else".into(),
+                    ));
+                }
+                Err(error) => {
+                    return Err(CallError::Failed(format!(
+                        "asking the user failed: {error}"
+                    )));
+                }
+            };
             let answer = serde_json::to_value(answer)
                 .map_err(|error| CallError::Failed(error.to_string()))?;
             given.insert(key, answer);
