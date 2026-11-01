@@ -1,5 +1,7 @@
 //! Serving a [`Kit`] as MCP. The only module in the system that names `rmcp`.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -13,13 +15,14 @@ use rmcp::model::{
     ResourceContents, ServerCapabilities, ServerConfig, Task, TaskPayload, TaskStatus,
     ToolAnnotations,
 };
+use rmcp::model::{ProgressNotificationParam, ProgressToken};
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::Value;
 use tracing::Instrument;
 
-use crate::kit::{CallError, Kit};
+use crate::kit::{CallError, Caller, Kit};
 use crate::module::Module;
-use crate::ops::Hints;
+use crate::ops::{Hints, Progress};
 use crate::seams::{Entitlements, Identity, Metering};
 use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
 use crate::trace;
@@ -228,13 +231,46 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<
                 .or_else(refusal)?;
             return Ok(CallToolResponse::Task(CreateTaskResult::new(listed(&task))));
         }
-        match self.kit.call(&request.name, bearer, arguments).await {
+        let caller = Caller {
+            bearer,
+            cancel: context.ct.clone(),
+            progress: context.meta.get_progress_token().map(|token| {
+                Arc::new(PeerProgress {
+                    peer: context.peer.clone(),
+                    token,
+                }) as Arc<dyn Progress>
+            }),
+        };
+        match self.kit.call_as(&request.name, caller, arguments).await {
             Ok(value) => Ok(CallToolResult::structured(value).into()),
             Err(error @ (CallError::NotEntitled(_) | CallError::Failed(_))) => {
                 Ok(tool_error(error).into())
             }
             Err(error) => refusal(error),
         }
+    }
+}
+
+/// Progress sent to the client as `notifications/progress`.
+struct PeerProgress {
+    peer: rmcp::service::Peer<RoleServer>,
+    token: ProgressToken,
+}
+
+impl Progress for PeerProgress {
+    fn report(
+        &self,
+        done: f64,
+        total: Option<f64>,
+        message: Option<String>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let mut note = ProgressNotificationParam::new(self.token.clone(), done);
+        note.total = total;
+        note.message = message;
+        Box::pin(async move {
+            // A client that has gone away cannot be told; the call goes on.
+            let _ = self.peer.notify_progress(note).await;
+        })
     }
 }
 
@@ -276,9 +312,13 @@ fn listed(task: &StoredTask) -> Task {
         TaskState::Succeeded(_) | TaskState::Errored(_) => TaskStatus::Completed,
         TaskState::Cancelled => TaskStatus::Cancelled,
     };
-    Task::new(&task.id, status, iso(task.created_at), iso(task.updated_at))
+    let listed = Task::new(&task.id, status, iso(task.created_at), iso(task.updated_at))
         .with_ttl_ms(TASK_TTL.as_millis() as u64)
-        .with_poll_interval_ms(POLL_MS)
+        .with_poll_interval_ms(POLL_MS);
+    match &task.status {
+        Some(status) => listed.with_status_message(status),
+        None => listed,
+    }
 }
 
 fn detailed(task: StoredTask) -> DetailedTask {

@@ -1,13 +1,17 @@
 //! A module with its seams: the one place every call is identified, checked,
 //! run and metered, whatever transport it arrived on.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::module::{Manifest, Module};
-use crate::ops::{App, Ctx, JsonObject, Ops, Tool};
+use crate::ops::{App, Ctx, JsonObject, Ops, Progress, Tool};
 use crate::seams::{
     Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage,
 };
@@ -28,6 +32,19 @@ struct Core<M> {
     module: Arc<M>,
     manifest: Manifest,
     ops: Ops<M>,
+    /// Tasks running in this process, to stop when a caller cancels one.
+    running: Mutex<HashMap<String, CancellationToken>>,
+}
+
+/// What a transport knows about a call besides its name and arguments.
+#[derive(Default)]
+pub(crate) struct Caller<'a> {
+    /// The request's bearer token: absent over stdio.
+    pub bearer: Option<&'a str>,
+    /// Cancelled when the client cancels the request.
+    pub cancel: CancellationToken,
+    /// Where progress goes, when the client asked for it.
+    pub progress: Option<Arc<dyn Progress>>,
 }
 
 impl<M: Module, I: Identity> Kit<M, I> {
@@ -40,6 +57,7 @@ impl<M: Module, I: Identity> Kit<M, I> {
                 manifest: module.manifest(),
                 module: Arc::new(module),
                 ops,
+                running: Mutex::default(),
             },
             identity,
             entitlements: Open,
@@ -112,8 +130,23 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         bearer: Option<&str>,
         arguments: JsonObject,
     ) -> Result<Value, CallError> {
-        let (index, space) = self.admit(name, bearer).await?;
-        self.run(index, space, arguments)
+        let caller = Caller {
+            bearer,
+            ..Caller::default()
+        };
+        self.call_as(name, caller, arguments).await
+    }
+
+    /// [`Self::call`] with everything the transport knows about the call.
+    pub(crate) async fn call_as(
+        &self,
+        name: &str,
+        caller: Caller<'_>,
+        arguments: JsonObject,
+    ) -> Result<Value, CallError> {
+        let (index, space) = self.admit(name, caller.bearer).await?;
+        let ctx = Ctx::new(space, caller.cancel, caller.progress);
+        self.run(index, ctx, arguments)
             .await
             .map_err(CallError::Failed)
     }
@@ -133,18 +166,29 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             space: Space::clone(&space),
             operation: self.core.ops.list[index].tool.name.to_owned(),
             state: TaskState::Working,
+            status: None,
             created_at: now,
             updated_at: now,
         };
         self.tasks.put(task.clone()).await.map_err(unavailable)?;
+        // The request that started the task ends now, so the task gets a
+        // token of its own, which cancelling the task triggers.
+        let cancel = CancellationToken::new();
+        self.running().insert(task.id.clone(), cancel.clone());
+        let progress = Arc::new(TaskProgress {
+            kit: self.clone(),
+            id: task.id.clone(),
+        });
+        let ctx = Ctx::new(space, cancel, Some(progress));
         let kit = self.clone();
         let started = task.clone();
         // The task's work stays in the span of the request that started it.
         tokio::spawn(tracing::Instrument::in_current_span(async move {
-            let state = match kit.run(index, space, arguments).await {
+            let state = match kit.run(index, ctx, arguments).await {
                 Ok(result) => TaskState::Succeeded(result),
                 Err(message) => TaskState::Errored(message),
             };
+            kit.running().remove(&started.id);
             if let Err(error) = kit.finish(started, state).await {
                 tracing::error!(%error, "a finished task could not be stored");
             }
@@ -163,18 +207,43 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         }
     }
 
-    /// Marks the caller's task `id` cancelled. Cooperative: an operation
-    /// already running finishes, and its result is discarded, because
-    /// stopping it between two awaits could leave the module's state half
-    /// written.
+    /// Marks the caller's task `id` cancelled. Cooperative: the operation
+    /// sees [`Ctx::is_cancelled`] when it runs in this process, stops where
+    /// its state is whole, and its result is discarded; the kit never stops
+    /// it between two awaits.
     pub async fn cancel(&self, bearer: Option<&str>, id: &str) -> Result<StoredTask, CallError> {
         let task = self.task(bearer, id).await?;
         if task.state.is_terminal() {
             return Ok(task);
         }
+        if let Some(cancel) = self.running().get(id) {
+            cancel.cancel();
+        }
         self.finish(task, TaskState::Cancelled)
             .await
             .map_err(unavailable)
+    }
+
+    /// Sets a running task's status message, which pollers see.
+    async fn status(&self, id: &str, status: String) -> std::io::Result<()> {
+        match self.tasks.get(id).await? {
+            Some(task) if !task.state.is_terminal() => {
+                let task = StoredTask {
+                    status: Some(status),
+                    updated_at: SystemTime::now(),
+                    ..task
+                };
+                self.tasks.put(task).await
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn running(&self) -> std::sync::MutexGuard<'_, HashMap<String, CancellationToken>> {
+        self.core
+            .running
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 
     async fn identify(&self, bearer: Option<&str>) -> Result<Arc<Space>, CallError> {
@@ -210,15 +279,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     }
 
     /// Runs an admitted operation and meters it.
-    async fn run(
-        &self,
-        index: usize,
-        space: Arc<Space>,
-        arguments: JsonObject,
-    ) -> Result<Value, String> {
+    async fn run(&self, index: usize, ctx: Ctx, arguments: JsonObject) -> Result<Value, String> {
         let op = &self.core.ops.list[index];
+        let space = ctx.space().clone();
         let started = Instant::now();
-        let result = (op.call)(self.core.module.clone(), Ctx::new(space.clone()), arguments).await;
+        let result = (op.call)(self.core.module.clone(), ctx, arguments).await;
         self.metering.record(
             &space,
             Usage {
@@ -245,6 +310,35 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         };
         self.tasks.put(task.clone()).await?;
         Ok(task)
+    }
+}
+
+/// A task's progress, kept as its status message.
+struct TaskProgress<K> {
+    kit: Arc<K>,
+    id: String,
+}
+
+impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Progress
+    for TaskProgress<Kit<M, I, E, T, S>>
+{
+    fn report(
+        &self,
+        done: f64,
+        total: Option<f64>,
+        message: Option<String>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let status = match (total, message) {
+            (Some(total), Some(message)) => format!("{done}/{total}: {message}"),
+            (Some(total), None) => format!("{done}/{total}"),
+            (None, Some(message)) => format!("{done}: {message}"),
+            (None, None) => format!("{done}"),
+        };
+        Box::pin(async move {
+            if let Err(error) = self.kit.status(&self.id, status).await {
+                tracing::warn!(%error, "a task's progress could not be stored");
+            }
+        })
     }
 }
 
