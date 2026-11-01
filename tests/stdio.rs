@@ -25,7 +25,7 @@ async fn a_client_lists_and_calls_tools_over_stdio() {
 
     let tools = client.list_all_tools().await.unwrap();
     let names: Vec<_> = tools.iter().map(|tool| tool.name.as_ref()).collect();
-    assert_eq!(names, ["echo_say", "echo_shout"]);
+    assert_eq!(names, ["echo_say", "echo_shout", "echo_wait"]);
     assert!(tools[0].output_schema.is_some());
 
     let said = client

@@ -12,6 +12,7 @@ mod module;
 mod ops;
 mod seams;
 mod serve;
+mod tasks;
 
 pub use kit::{CallError, Kit};
 pub use module::{Audience, Hardware, Manifest, Module, Routing};
@@ -20,3 +21,4 @@ pub use ops::{Ctx, JsonObject, Ops, Tool};
 /// and the kit cannot disagree on its version.
 pub use schemars;
 pub use seams::{Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage};
+pub use tasks::{MemoryTasks, StoredTask, TASK_TTL, TaskState, TaskStore};

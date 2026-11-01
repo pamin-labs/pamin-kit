@@ -48,6 +48,8 @@ pub struct Tool {
     /// Absent when the result is not a JSON object, which MCP's structured
     /// output cannot describe.
     pub output: Option<Arc<JsonObject>>,
+    /// Runs as a task for callers that support tasks.
+    pub long: bool,
 }
 
 /// One registered operation.
@@ -77,6 +79,42 @@ impl<M: Send + Sync + 'static> Ops<M> {
         &mut self,
         name: &'static str,
         feature: Feature,
+        handler: F,
+    ) -> &mut Self
+    where
+        A: DeserializeOwned + JsonSchema,
+        R: Serialize + JsonSchema,
+        E: std::fmt::Display,
+        F: Fn(Arc<M>, Ctx, A) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R, E>> + Send + 'static,
+    {
+        self.add(name, feature, false, handler)
+    }
+
+    /// Registers a long operation, over about a second, like [`Self::tool`].
+    /// A caller that supports tasks gets a task at once and polls it for the
+    /// result; any other caller waits for the result as for a tool.
+    pub fn task<A, R, E, F, Fut>(
+        &mut self,
+        name: &'static str,
+        feature: Feature,
+        handler: F,
+    ) -> &mut Self
+    where
+        A: DeserializeOwned + JsonSchema,
+        R: Serialize + JsonSchema,
+        E: std::fmt::Display,
+        F: Fn(Arc<M>, Ctx, A) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R, E>> + Send + 'static,
+    {
+        self.add(name, feature, true, handler)
+    }
+
+    fn add<A, R, E, F, Fut>(
+        &mut self,
+        name: &'static str,
+        feature: Feature,
+        long: bool,
         handler: F,
     ) -> &mut Self
     where
@@ -119,6 +157,7 @@ impl<M: Send + Sync + 'static> Ops<M> {
                 description,
                 input: Arc::new(input),
                 output,
+                long,
             },
             call,
         });

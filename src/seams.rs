@@ -8,7 +8,7 @@ use std::time::Duration;
 
 /// Who a call is for and what it works on. It comes only from the caller's
 /// identity, never from tool arguments.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Space {
     pub tenant: String,
     pub user: String,
@@ -59,6 +59,13 @@ pub struct Local {
 }
 
 impl Local {
+    /// The project named by the working directory, canonicalized so that
+    /// two paths to one directory are one project.
+    pub fn from_working_directory() -> std::io::Result<Self> {
+        let directory = std::env::current_dir()?.canonicalize()?;
+        Ok(Self::new(directory.to_string_lossy()))
+    }
+
     pub fn new(project: impl Into<String>) -> Self {
         Self {
             space: Arc::new(Space {

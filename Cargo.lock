@@ -823,6 +823,7 @@ name = "pamin-kit"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "http",
  "insta",
  "jsonschema",
@@ -831,6 +832,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
