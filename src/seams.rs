@@ -100,3 +100,49 @@ pub struct Unmetered;
 impl Metering for Unmetered {
     fn record(&self, _space: &Space, _usage: Usage) {}
 }
+
+/// A resource that changed, in the space whose call changed it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Change {
+    pub space: Arc<Space>,
+    pub uri: String,
+}
+
+/// Carries resource changes from the calls that make them to the clients
+/// listening for them (`subscriptions/listen`). Used when a call changes a
+/// resource and when a listener starts, never on the call path otherwise.
+pub trait ChangeFeed: Send + Sync + 'static {
+    /// Publishes a change, without waiting on listeners.
+    fn publish(&self, change: Change);
+
+    /// Every change from now on, in every space; the kit keeps each
+    /// listener to its own space.
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Change>;
+}
+
+/// The open-source feed: changes reach listeners in this process. Enough for
+/// one local server, and for a module routed `sharded_by_project`, whose
+/// project's writers and listeners share an instance; a feed across
+/// instances (PostgreSQL `LISTEN`, Redis) implements [`ChangeFeed`].
+#[derive(Debug)]
+pub struct InProcessChanges(tokio::sync::broadcast::Sender<Change>);
+
+/// How many changes a slow listener may fall behind before it skips some.
+const BACKLOG: usize = 1024;
+
+impl Default for InProcessChanges {
+    fn default() -> Self {
+        Self(tokio::sync::broadcast::channel(BACKLOG).0)
+    }
+}
+
+impl ChangeFeed for InProcessChanges {
+    fn publish(&self, change: Change) {
+        // Nobody listening is not an error.
+        let _ = self.0.send(change);
+    }
+
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Change> {
+        self.0.subscribe()
+    }
+}

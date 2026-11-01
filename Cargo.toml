@@ -50,7 +50,7 @@ opentelemetry = { version = "0.33.1", default-features = false, features = ["tra
 opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace", "testing"] }
 rmcp = { version = "=3.8.0", default-features = false, features = ["client", "transport-child-process"] }
 serde = { version = "1.0.229", features = ["derive"] }
-tokio = { version = "1.54.1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1.54.1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1.44"
 tracing-opentelemetry = { version = "0.34.0", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }

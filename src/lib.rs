@@ -26,5 +26,8 @@ pub use ops::{
 /// The schema generator contract types derive with, re-exported so a module
 /// and the kit cannot disagree on its version.
 pub use schemars;
-pub use seams::{Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage};
+pub use seams::{
+    Change, ChangeFeed, Entitlements, Feature, Identity, InProcessChanges, Local, Metering, Open,
+    Space, Unmetered, Usage,
+};
 pub use tasks::{InProcessTasks, StoredTask, TASK_TTL, TaskState, TaskStore};

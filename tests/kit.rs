@@ -213,3 +213,31 @@ async fn a_task_waits_for_the_users_answer_and_goes_on() {
     };
     assert_eq!(reply.value, json!("hello"));
 }
+
+/// A feed that keeps what it is given, as a feed across instances would
+/// forward it.
+#[derive(Clone, Default)]
+struct Kept(Arc<Mutex<Vec<pamin_kit::Change>>>);
+
+impl pamin_kit::ChangeFeed for Kept {
+    fn publish(&self, change: pamin_kit::Change) {
+        self.0.lock().unwrap().push(change);
+    }
+
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<pamin_kit::Change> {
+        tokio::sync::broadcast::channel(1).1
+    }
+}
+
+#[tokio::test]
+async fn changes_go_through_the_feed_the_binary_chose() {
+    let kept = Kept::default();
+    let kit = Kit::new(Echo, Local::new("notes")).with_changes(kept.clone());
+    kit.call("echo_say", None, args(json!({"text": "hi"})))
+        .await
+        .unwrap();
+    let published = kept.0.lock().unwrap().clone();
+    assert_eq!(published.len(), 1);
+    assert_eq!(published[0].uri, "echo://say/hi");
+    assert_eq!(published[0].space.project, "notes");
+}
