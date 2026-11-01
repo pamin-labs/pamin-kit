@@ -35,7 +35,8 @@ expression: tools
         "project"
       ],
       "type": "object"
-    }
+    },
+    "task": false
   },
   {
     "description": "Says the text back, with the project it was said in.",
@@ -69,6 +70,49 @@ expression: tools
         "project"
       ],
       "type": "object"
-    }
+    },
+    "task": false
+  },
+  {
+    "description": "Waits, then says the text back.",
+    "feature": "core",
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "millis": {
+          "description": "How long to wait first, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "description": "What to say.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "millis"
+      ],
+      "type": "object"
+    },
+    "name": "echo_wait",
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "project"
+      ],
+      "type": "object"
+    },
+    "task": true
   }
 ]

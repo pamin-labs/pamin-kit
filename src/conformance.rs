@@ -83,6 +83,7 @@ pub fn check<M: Module>(module: M, skill: &Path) -> Value {
                 "description": tool.description,
                 "input": *tool.input,
                 "output": tool.output.as_deref(),
+                "task": tool.long,
             })
         })
         .collect()

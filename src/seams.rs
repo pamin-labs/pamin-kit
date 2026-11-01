@@ -8,7 +8,7 @@ use std::time::Duration;
 
 /// Who a call is for and what it works on. It comes only from the caller's
 /// identity, never from tool arguments.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Space {
     pub tenant: String,
     pub user: String,
