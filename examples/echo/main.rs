@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use pamin_kit::schemars::JsonSchema;
 use pamin_kit::{
-    Audience, Ctx, Feature, Hardware, Hints, Kit, Local, Manifest, Module, Ops, Routing, Space,
+    Audience, Body, Ctx, Feature, Hardware, Hints, Kit, Local, Manifest, Module, Ops, Routing,
+    Space,
 };
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +25,13 @@ pub struct Say {
 pub struct Said {
     text: String,
     project: String,
+}
+
+/// Text to say, as a resource: what reading it would say back.
+#[derive(Deserialize, JsonSchema)]
+pub struct SayUri {
+    /// What to say.
+    text: String,
 }
 
 /// Waits, then says the text back.
@@ -100,6 +108,30 @@ impl Module for Echo {
                 idempotent: true,
                 open_world: false,
                 ..Hints::default()
+            },
+        )
+        .resource(
+            "echo://about",
+            "About echo",
+            Feature::Core,
+            |_: Arc<Self>, _: Ctx, (): ()| async {
+                Ok::<_, String>(Body::Text {
+                    mime: "text/plain",
+                    text: "Echo says text back.".into(),
+                })
+            },
+        )
+        .resource(
+            "echo://say/{text}",
+            "Said",
+            Feature::Core,
+            |m: Arc<Self>, ctx: Ctx, uri: SayUri| async move {
+                let said = m.say(ctx.space(), Say { text: uri.text }).await?;
+                let text = serde_json::to_string(&said).map_err(|error| error.to_string())?;
+                Ok::<_, String>(Body::Text {
+                    mime: "application/json",
+                    text,
+                })
             },
         )
         .instructions("Use echo_say to hear text back; echo_wait for a slow reply.");

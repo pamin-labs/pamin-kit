@@ -859,12 +859,15 @@ name = "pamin-kit"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "chrono",
  "http",
  "insta",
  "jsonschema",
+ "matchit",
  "opentelemetry",
  "opentelemetry_sdk",
+ "percent-encoding",
  "rmcp",
  "schemars",
  "serde",

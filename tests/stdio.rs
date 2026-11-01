@@ -118,3 +118,43 @@ async fn a_long_call_reports_progress_to_a_client_that_asks() {
     assert_eq!(seen[9], (9.0, Some(10.0)));
     client.cancel().await.unwrap();
 }
+
+#[tokio::test]
+async fn resources_and_templates_are_listed_and_read() {
+    let transport = TokioChildProcess::new(tokio::process::Command::new(example())).unwrap();
+    let client = ().serve(transport).await.unwrap();
+
+    let listed = client.list_all_resources().await.unwrap();
+    let uris: Vec<_> = listed.iter().map(|r| r.uri.as_str()).collect();
+    assert_eq!(uris, ["ui://echo/said", "echo://about"]);
+
+    let templates = client.list_all_resource_templates().await.unwrap();
+    assert_eq!(templates[0].uri_template, "echo://say/{text}");
+    assert_eq!(
+        templates[0].description.as_deref(),
+        Some("Text to say, as a resource: what reading it would say back.")
+    );
+
+    // A template's variable arrives percent-decoded.
+    let read = client
+        .read_resource(ReadResourceRequestParams::new("echo://say/hello%20there"))
+        .await
+        .unwrap();
+    let ResourceContents::TextResourceContents {
+        mime_type, text, ..
+    } = &read.contents[0]
+    else {
+        panic!("not text");
+    };
+    assert_eq!(mime_type.as_deref(), Some("application/json"));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(text).unwrap(),
+        json!({"text": "hello there", "project": "example"})
+    );
+
+    let missing = client
+        .read_resource(ReadResourceRequestParams::new("echo://nowhere"))
+        .await;
+    assert!(missing.is_err());
+    client.cancel().await.unwrap();
+}

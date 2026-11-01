@@ -67,19 +67,46 @@ pub fn check<M: Module>(module: M, skill: &Path) -> Value {
             failures.push(format!("{name}: SKILL.md does not name it"));
         }
     }
+    for resource in kit.resources() {
+        let uri = resource.uri;
+        for variable in
+            variables(uri).filter(|name| TENANCY.contains(&name.to_ascii_lowercase().as_str()))
+        {
+            failures.push(format!(
+                "{uri}: variable {variable:?} names a tenant, user or project; \
+                 read the space from the context instead"
+            ));
+        }
+        if !resource.is_template() {
+            match now(kit.read(uri, None)) {
+                Err(CallError::Unidentified) => {}
+                other => failures.push(format!(
+                    "{uri}: a read without an identity returned {other:?} instead of a refusal"
+                )),
+            }
+        }
+    }
+    // A long operation registered as a tool would hold the connection open
+    // and be lost on a reconnect; one registered as a task survives it.
+    let tasks = kit.tools().any(|tool| tool.long);
+    if kit.manifest().long_running != tasks {
+        failures.push(format!(
+            "the manifest says long_running: {}, but {} operation is registered with Ops::task",
+            kit.manifest().long_running,
+            if tasks { "an" } else { "no" }
+        ));
+    }
     assert!(
         failures.is_empty(),
         "conformance failed:\n{}",
         failures.join("\n")
     );
-    kit.tools()
+    let tools: Vec<Value> = kit
+        .tools()
         .map(|tool| {
             json!({
                 "name": tool.name,
-                "feature": match tool.feature {
-                    Feature::Core => "core",
-                    Feature::Pro(feature) => feature,
-                },
+                "feature": feature(tool.feature),
                 "description": tool.description,
                 "input": *tool.input,
                 "output": tool.output.as_deref(),
@@ -88,7 +115,33 @@ pub fn check<M: Module>(module: M, skill: &Path) -> Value {
                 "hints": tool.hints,
             })
         })
-        .collect()
+        .collect();
+    let resources: Vec<Value> = kit
+        .resources()
+        .map(|resource| {
+            json!({
+                "uri": resource.uri,
+                "name": resource.name,
+                "feature": feature(resource.feature),
+                "description": resource.description,
+            })
+        })
+        .collect();
+    json!({"tools": tools, "resources": resources})
+}
+
+fn feature(feature: Feature) -> &'static str {
+    match feature {
+        Feature::Core => "core",
+        Feature::Pro(feature) => feature,
+    }
+}
+
+/// The `{name}` variables of a resource URI template.
+fn variables(uri: &str) -> impl Iterator<Item = &str> {
+    uri.split('{')
+        .skip(1)
+        .filter_map(|part| part.split_once('}').map(|(name, _)| name))
 }
 
 /// Runs the module's conformance checks and snapshots its tool schemas.
@@ -187,6 +240,13 @@ mod tests {
             "$defs": {"Filter": {"properties": {"Project_Id": {}}}}
         });
         assert_eq!(tenancy(schema.as_object().unwrap()), ["Project_Id"]);
+    }
+
+    #[test]
+    fn template_variables_are_found() {
+        let found: Vec<_> = variables("memory://{project}/topics/{topic}").collect();
+        assert_eq!(found, ["project", "topic"]);
+        assert_eq!(variables("memory://topics").count(), 0);
     }
 
     #[test]

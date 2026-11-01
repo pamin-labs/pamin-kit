@@ -7,9 +7,22 @@
 # that happens.
 allow = [
     "Apache-2.0",
+    # `matchit`, axum's router, which also matches resource templates, is
+    # MIT AND BSD-3-Clause: it derives from Go's httprouter.
+    "BSD-3-Clause",
     "MIT",
+    # `borrow-or-share`, under jsonschema in the conformance feature.
+    "MIT-0",
     "Unicode-3.0",
+    # `foldhash`, hashbrown's default hasher, which jsonschema's
+    # `referencing` turns on, in the conformance feature.
+    "Zlib",
 ]
 
 [bans]
 multiple-versions = "allow"
+
+[graph]
+# Check the optional features too: http, otel and conformance bring crates
+# the default build does not.
+all-features = true

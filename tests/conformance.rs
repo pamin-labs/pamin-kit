@@ -58,3 +58,23 @@ fn a_project_argument_fails() {
 fn a_tool_missing_from_the_skill_fails() {
     pamin_kit::conformance::check(Leaky, std::path::Path::new("examples/echo/SKILL.md"));
 }
+
+/// Says it runs long but registers no task.
+struct Slow;
+
+impl Module for Slow {
+    fn manifest(&self) -> Manifest {
+        Manifest {
+            long_running: true,
+            ..Leaky.manifest()
+        }
+    }
+
+    fn register(&self, _ops: &mut Ops<Self>) {}
+}
+
+#[test]
+#[should_panic(expected = "the manifest says long_running: true, but no operation")]
+fn a_long_running_manifest_without_tasks_fails() {
+    pamin_kit::conformance::check(Slow, std::path::Path::new("examples/echo/SKILL.md"));
+}
