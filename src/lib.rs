@@ -17,6 +17,12 @@ pub use serve::{HttpOptions, ProtectedResource};
 mod tasks;
 mod trace;
 
+// The README's example compiles as a doctest, so it cannot drift from the
+// API.
+#[doc = include_str!("../README.md")]
+#[cfg(doctest)]
+pub struct ReadmeDoctests;
+
 pub use kit::{CallError, Kit, Reply};
 pub use module::{Audience, Hardware, Manifest, Module, Routing};
 pub use ops::{
