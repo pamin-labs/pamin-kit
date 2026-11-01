@@ -137,7 +137,8 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         self.tasks.put(task.clone()).await.map_err(unavailable)?;
         let kit = self.clone();
         let started = task.clone();
-        tokio::spawn(async move {
+        // The task's work stays in the span of the request that started it.
+        tokio::spawn(tracing::Instrument::in_current_span(async move {
             let state = match kit.run(index, space, arguments).await {
                 Ok(result) => TaskState::Succeeded(result),
                 Err(message) => TaskState::Errored(message),
@@ -145,7 +146,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             if let Err(error) = kit.finish(started, state).await {
                 tracing::error!(%error, "a finished task could not be stored");
             }
-        });
+        }));
         Ok(task)
     }
 
