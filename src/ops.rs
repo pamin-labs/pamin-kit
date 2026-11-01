@@ -39,8 +39,19 @@ pub struct Ask {
     /// Identifies the answer when the client sends it back.
     pub key: String,
     pub message: String,
-    /// The answer's JSON Schema: an object of primitive fields.
-    pub schema: JsonObject,
+    pub form: Form,
+}
+
+/// How the user answers a question.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Form {
+    /// In the client, as fields: the answer's JSON Schema, an object of
+    /// primitive fields.
+    Fields(JsonObject),
+    /// On a web page the client opens, for what must not pass through the
+    /// client: signing in elsewhere, payment, secrets.
+    Url(String),
 }
 
 /// What [`Ctx::ask`] returns while the user has not answered yet: return it
@@ -169,34 +180,68 @@ impl Ctx {
         key: &str,
         message: &str,
     ) -> Result<Option<T>, NeedsInput> {
-        let answer = INPUT.try_with(|input| {
-            let mut input = input.borrow_mut();
-            let given = input.answers.as_ref().and_then(|answers| answers.get(key));
-            let decided = given
-                .and_then(|given| serde_json::from_value::<ElicitResult>(given.clone()).ok())
-                .and_then(|result| match result.action {
-                    ElicitationAction::Accept => result
-                        .content
-                        .and_then(|content| serde_json::from_value(content).ok())
-                        .map(Some),
-                    _ => Some(None),
-                });
-            match decided {
-                Some(answer) => Ok(answer),
-                // Not answered yet, or answered in a form that does not
-                // parse: ask.
-                None => {
-                    input.effects.asked.push(Ask {
-                        key: key.to_owned(),
-                        message: message.to_owned(),
-                        schema: JsonObject::clone(&schema_for_type::<T>()),
-                    });
+        let fields = || Form::Fields(JsonObject::clone(&schema_for_type::<T>()));
+        match self.answer(key, message, fields)? {
+            Some(content) => match serde_json::from_value(content) {
+                Ok(answer) => Ok(Some(answer)),
+                // Answered in a form that does not parse: ask again.
+                Err(_) => {
+                    self.record(key, message, fields());
                     Err(NeedsInput)
                 }
+            },
+            None => Ok(None),
+        }
+    }
+
+    /// Asks the user to open `url` and do something there that must not
+    /// pass through the client, such as signing in elsewhere or paying, as
+    /// MCP's URL elicitation has it. Returns whether they agreed to go;
+    /// what they did there reaches the module out of band, so the operation
+    /// checks it when it runs again and asks again if it is not done.
+    pub fn ask_url(&self, key: &str, message: &str, url: &str) -> Result<bool, NeedsInput> {
+        let answered = self.answer(key, message, || Form::Url(url.to_owned()))?;
+        Ok(answered.is_some())
+    }
+
+    /// The content of the user's answer to `key` when they accepted, `None`
+    /// when they declined, or [`NeedsInput`] after recording the question
+    /// when they have not answered: what both kinds of question share.
+    fn answer(
+        &self,
+        key: &str,
+        message: &str,
+        form: impl FnOnce() -> Form,
+    ) -> Result<Option<Value>, NeedsInput> {
+        let given = INPUT
+            .try_with(|input| {
+                let input = input.borrow();
+                let given = input.answers.as_ref()?.get(key)?;
+                serde_json::from_value::<ElicitResult>(given.clone()).ok()
+            })
+            // Outside a kit call there is nobody to ask.
+            .map_err(|_| NeedsInput)?;
+        match given {
+            Some(result) => Ok(match result.action {
+                ElicitationAction::Accept => Some(result.content.unwrap_or(Value::Null)),
+                _ => None,
+            }),
+            None => {
+                self.record(key, message, form());
+                Err(NeedsInput)
             }
+        }
+    }
+
+    /// Records a question for the kit to put to the user.
+    fn record(&self, key: &str, message: &str, form: Form) {
+        let _ = INPUT.try_with(|input| {
+            input.borrow_mut().effects.asked.push(Ask {
+                key: key.to_owned(),
+                message: message.to_owned(),
+                form,
+            });
         });
-        // Outside a kit call there is nobody to ask.
-        answer.unwrap_or(Err(NeedsInput))
     }
 
     /// Returns `content` beside a tool's structured result: an image, audio,

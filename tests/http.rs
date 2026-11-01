@@ -149,3 +149,39 @@ async fn a_listener_hears_changes_in_its_own_space_only() {
     assert!(ada.await.unwrap(), "Ada's listener missed her own change");
     assert!(!bob.await.unwrap(), "Bob heard a change in Ada's space");
 }
+
+#[tokio::test]
+async fn a_page_to_open_is_asked_only_of_a_client_that_can() {
+    let address = serve().await;
+    let visit = |capabilities: serde_json::Value| {
+        let mut visit = call("echo_visit", json!({}));
+        visit["_meta"] = json!({"io.modelcontextprotocol/clientCapabilities": capabilities});
+        visit
+    };
+
+    let (_, asked) = rpc(
+        address,
+        "ada",
+        false,
+        "tools/call",
+        visit(json!({"elicitation": {"form": {}, "url": {}}})),
+    )
+    .await;
+    let question = &asked["result"]["inputRequests"]["visit"]["params"];
+    assert_eq!(question["mode"], "url", "{asked}");
+    assert_eq!(question["url"], "https://example.com/echo");
+    assert!(question["elicitationId"].is_string());
+
+    let (_, refused) = rpc(
+        address,
+        "ada",
+        false,
+        "tools/call",
+        visit(json!({"elicitation": {"form": {}}})),
+    )
+    .await;
+    let text = refused["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(text.contains("cannot do"), "{refused}");
+}

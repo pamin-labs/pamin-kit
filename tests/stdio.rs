@@ -5,6 +5,9 @@ use rmcp::model::{CallToolRequestParams, ReadResourceRequestParams, ResourceCont
 use rmcp::transport::TokioChildProcess;
 use serde_json::json;
 
+#[path = "../examples/echo/main.rs"]
+mod echo;
+
 /// The example binary `cargo test` builds beside this test's own binary.
 fn example() -> std::path::PathBuf {
     let deps = std::env::current_exe().unwrap();
@@ -26,16 +29,10 @@ async fn a_client_lists_and_calls_tools_over_stdio() {
 
     let tools = client.list_all_tools().await.unwrap();
     let names: Vec<_> = tools.iter().map(|tool| tool.name.as_ref()).collect();
-    assert_eq!(
-        names,
-        [
-            "echo_say",
-            "echo_shout",
-            "echo_dot",
-            "echo_confirm",
-            "echo_wait"
-        ]
-    );
+    // Listed as registered, in order.
+    let registered = pamin_kit::Kit::new(echo::Echo, pamin_kit::Local::new("example"));
+    let expected: Vec<_> = registered.tools().map(|tool| tool.name).collect();
+    assert_eq!(names, expected);
     assert!(tools[0].output_schema.is_some());
     assert_eq!(tools[0].title.as_deref(), Some("Say"));
     let hints = tools[0].annotations.as_ref().unwrap();
