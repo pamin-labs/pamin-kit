@@ -2,68 +2,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use pamin_kit::schemars::JsonSchema;
-use pamin_kit::{
-    Audience, CallError, Ctx, Feature, Hardware, Identity, Kit, Local, Manifest, Metering, Module,
-    Ops, Routing, Space, Usage,
-};
-use serde::{Deserialize, Serialize};
+use pamin_kit::{CallError, Feature, Identity, Kit, Local, Metering, Space, Usage};
 use serde_json::{Value, json};
 
-struct Echo;
-
-/// Says the text back, with the project it was said in.
-#[derive(Deserialize, JsonSchema)]
-struct Say {
-    /// What to say.
-    text: String,
-}
-
-#[derive(Serialize, JsonSchema)]
-struct Said {
-    text: String,
-    project: String,
-}
-
-impl Echo {
-    async fn say(&self, space: &Space, say: Say) -> Result<Said, String> {
-        if say.text.is_empty() {
-            return Err("nothing to say".into());
-        }
-        Ok(Said {
-            text: say.text,
-            project: space.project.clone(),
-        })
-    }
-}
-
-impl Module for Echo {
-    fn manifest(&self) -> Manifest {
-        Manifest {
-            name: "echo",
-            contract_version: "1.0.0",
-            routing: Routing::Stateless,
-            long_running: false,
-            scopes: vec![],
-            metering_unit: "call",
-            hardware: Hardware::default(),
-            audience: Audience::default(),
-        }
-    }
-
-    fn register(&self, ops: &mut Ops<Self>) {
-        ops.tool(
-            "echo_say",
-            Feature::Core,
-            |m: Arc<Self>, ctx: Ctx, a: Say| async move { m.say(ctx.space(), a).await },
-        )
-        .tool(
-            "echo_shout",
-            Feature::Pro("shout"),
-            |m: Arc<Self>, ctx: Ctx, a: Say| async move { m.say(ctx.space(), a).await },
-        );
-    }
-}
+#[path = "../examples/echo.rs"]
+mod echo;
+use echo::Echo;
 
 fn args(value: Value) -> pamin_kit::JsonObject {
     match value {
