@@ -322,6 +322,31 @@ pub struct Tool {
     pub ui: Option<&'static str>,
     /// What a host may assume about the tool, when the module says.
     pub hints: Option<Hints>,
+    pub looks: Looks,
+}
+
+/// How a tool, prompt, resource or the server shows to people: none of it
+/// changes what it does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct Looks {
+    /// A name for people, where the registered name is for models.
+    pub title: Option<&'static str>,
+    pub icons: &'static [Icon],
+    /// A resource's MIME type, shown before it is read.
+    pub mime: Option<&'static str>,
+    /// Who a resource is for: the user, the model, or both.
+    pub audience: &'static [Role],
+    /// How much a resource matters, from 0 (least) to 1 (most).
+    pub priority: Option<f32>,
+}
+
+/// An icon, by URL or `data:` URI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Icon {
+    pub src: &'static str,
+    pub mime: Option<&'static str>,
+    /// Such as `48x48`, or `any` for scalable icons.
+    pub sizes: &'static [&'static str],
 }
 
 /// What a host may assume about a tool, sent as MCP tool annotations: hints
@@ -330,8 +355,6 @@ pub struct Tool {
 /// beyond the module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Hints {
-    /// A name for people, where the tool's name is for models.
-    pub title: Option<&'static str>,
     /// Changes nothing.
     pub read_only: bool,
     /// May delete or overwrite; meaningful only when not read-only.
@@ -345,7 +368,6 @@ pub struct Hints {
 impl Default for Hints {
     fn default() -> Self {
         Self {
-            title: None,
             read_only: false,
             destructive: true,
             idempotent: false,
@@ -364,6 +386,7 @@ pub struct Resource {
     pub feature: Feature,
     /// The variables type's doc comment, for a template.
     pub description: Option<String>,
+    pub looks: Looks,
 }
 
 impl Resource {
@@ -473,6 +496,7 @@ pub struct Prompt {
     /// The arguments' JSON Schema, for conformance: MCP prompt arguments
     /// are strings.
     pub schema: Arc<JsonObject>,
+    pub looks: Looks,
 }
 
 /// One argument of a prompt, from a field of its arguments type.
@@ -483,8 +507,9 @@ pub struct PromptArgument {
     pub required: bool,
 }
 
-/// Who says a prompt message.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Who says a prompt message, or who a resource is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     User,
     Assistant,
@@ -545,6 +570,7 @@ pub struct Ops<M> {
     pub(crate) completers: Vec<Completer<M>>,
     pub(crate) apps: Vec<App>,
     pub(crate) instructions: Option<&'static str>,
+    pub(crate) server: Looks,
 }
 
 impl<M: Send + Sync + 'static> Ops<M> {
@@ -556,6 +582,7 @@ impl<M: Send + Sync + 'static> Ops<M> {
             completers: Vec::new(),
             apps: Vec::new(),
             instructions: None,
+            server: Looks::default(),
         }
     }
 
@@ -656,6 +683,7 @@ impl<M: Send + Sync + 'static> Ops<M> {
                 name,
                 feature,
                 description,
+                looks: Looks::default(),
             },
             read: erase(handler, Ok),
         });
@@ -699,6 +727,7 @@ impl<M: Send + Sync + 'static> Ops<M> {
                 description,
                 arguments,
                 schema: Arc::new(schema),
+                looks: Looks::default(),
             },
             get: erase(handler, Ok),
         });
@@ -741,6 +770,31 @@ impl<M: Send + Sync + 'static> Ops<M> {
     /// When `tool` is not registered yet.
     pub fn hints(&mut self, tool: &str, hints: Hints) -> &mut Self {
         self.registered(tool).hints = Some(hints);
+        self
+    }
+
+    /// How `target` (a tool or prompt by name, or a resource by URI) shows
+    /// to people.
+    ///
+    /// # Panics
+    ///
+    /// When `target` is not registered yet.
+    pub fn looks(&mut self, target: &str, looks: Looks) -> &mut Self {
+        if let Some(op) = self.list.iter_mut().find(|op| op.tool.name == target) {
+            op.tool.looks = looks;
+        } else if let Some(p) = self.prompts.iter_mut().find(|p| p.prompt.name == target) {
+            p.prompt.looks = looks;
+        } else if let Some(r) = self.resources.iter_mut().find(|r| r.resource.uri == target) {
+            r.resource.looks = looks;
+        } else {
+            panic!("register {target} before describing it");
+        }
+        self
+    }
+
+    /// How the server itself shows to people, in hosts that list servers.
+    pub fn server(&mut self, looks: Looks) -> &mut Self {
+        self.server = looks;
         self
     }
 
@@ -804,6 +858,7 @@ impl<M: Send + Sync + 'static> Ops<M> {
                 long,
                 ui: None,
                 hints: None,
+                looks: Looks::default(),
             },
             call,
         });

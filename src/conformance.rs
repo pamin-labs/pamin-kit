@@ -134,6 +134,7 @@ pub fn check<M: Module>(module: M, skill: &Path) -> Value {
                 "task": tool.long,
                 "ui": tool.ui,
                 "hints": tool.hints,
+                "looks": tool.looks,
             })
         })
         .collect();
@@ -145,6 +146,7 @@ pub fn check<M: Module>(module: M, skill: &Path) -> Value {
                 "name": resource.name,
                 "feature": feature(resource.feature),
                 "description": resource.description,
+                "looks": resource.looks,
             })
         })
         .collect();
@@ -156,6 +158,7 @@ pub fn check<M: Module>(module: M, skill: &Path) -> Value {
                 "feature": feature(prompt.feature),
                 "description": prompt.description,
                 "arguments": prompt.arguments,
+                "looks": prompt.looks,
             })
         })
         .collect();

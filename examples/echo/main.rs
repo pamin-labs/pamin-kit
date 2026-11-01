@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use pamin_kit::schemars::JsonSchema;
 use pamin_kit::{
-    Audience, Body, Content, Ctx, Feature, Hardware, Hints, Kit, Local, Manifest, Message, Module,
-    Ops, Role, Routing, Space,
+    Audience, Body, Content, Ctx, Feature, Hardware, Hints, Icon, Kit, Local, Looks, Manifest,
+    Message, Module, Ops, Role, Routing, Space,
 };
 use serde::{Deserialize, Serialize};
 
@@ -190,7 +190,6 @@ impl Module for Echo {
         .hints(
             "echo_say",
             Hints {
-                title: Some("Say"),
                 read_only: true,
                 idempotent: true,
                 open_world: false,
@@ -238,6 +237,32 @@ impl Module for Echo {
                 )
             },
         )
+        .looks(
+            "echo_say",
+            Looks {
+                title: Some("Say"),
+                ..Looks::default()
+            },
+        )
+        .looks(
+            "echo://about",
+            Looks {
+                title: Some("About echo"),
+                mime: Some("text/plain"),
+                audience: &[Role::User],
+                priority: Some(0.2),
+                ..Looks::default()
+            },
+        )
+        .server(Looks {
+            title: Some("Echo"),
+            icons: &[Icon {
+                src: "https://example.com/echo.svg",
+                mime: Some("image/svg+xml"),
+                sizes: &["any"],
+            }],
+            ..Looks::default()
+        })
         .instructions("Use echo_say to hear text back; echo_wait for a slow reply.");
     }
 }

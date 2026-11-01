@@ -14,8 +14,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::module::{Manifest, Module};
 use crate::ops::{
-    APP_MIME, App, Ask, Body, Content, Ctx, JsonObject, Message, Ops, Progress, Prompt, Resource,
-    Tool, with_input,
+    APP_MIME, App, Ask, Body, Content, Ctx, JsonObject, Looks, Message, Ops, Progress, Prompt,
+    Resource, Tool, with_input,
 };
 use crate::seams::{
     Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage,
@@ -144,6 +144,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     /// The module's guidance for a model, if it gave any.
     pub fn instructions(&self) -> Option<&'static str> {
         self.core.ops.instructions
+    }
+
+    /// How the server shows to people.
+    pub fn looks(&self) -> &Looks {
+        &self.core.ops.server
     }
 
     /// Every registered MCP App page.
