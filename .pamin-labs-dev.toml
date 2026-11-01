@@ -1,0 +1,7 @@
+# pamin-labs-dev coordinates the coding agents of Pamin Labs engineers in this
+# repository. Without the Pamin Labs plugin this file has no effect.
+product = "pamin-kit"
+server = "https://dev.paminlabs.com"
+# Paths and symbols whose changes always count as `replace` and escalate.
+protected = []
+protected_symbols = []
