@@ -34,7 +34,7 @@ use tracing::Instrument;
 use crate::kit::{CallError, Caller, Kit};
 use crate::module::Module;
 use crate::ops::{APP_MIME, Ask, Body, Hints, Progress, Role};
-use crate::seams::{Entitlements, Identity, Metering};
+use crate::seams::{Entitlements, Identity, Metering, Space};
 use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
 use crate::trace;
 
@@ -169,7 +169,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
 
     async fn listen(&self, subscription: SubscriptionContext) -> Result<(), ErrorData> {
         let request = subscription.request_context();
-        let space = self.kit.identify(bearer(request)).await.or_else(refusal)?;
+        let space = self
+            .kit
+            .identified(&caller(request, None))
+            .await
+            .or_else(refusal)?;
         let mut changes = self.kit.changes();
         loop {
             let changed = tokio::select! {
@@ -373,7 +377,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         let span = trace::request("tasks/get", &request.task_id, &context);
         let result = self
             .kit
-            .task(bearer(&context), &request.task_id)
+            .task_as(&caller(&context, None), &request.task_id)
             .instrument(span.clone())
             .await
             .map(|task| GetTaskResult::new(detailed(task)))
@@ -390,7 +394,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         let span = trace::request("tasks/update", &request.task_id, &context);
         let result = self
             .kit
-            .update(bearer(&context), &request.task_id, request.input_responses)
+            .update_as(
+                &caller(&context, None),
+                &request.task_id,
+                request.input_responses,
+            )
             .instrument(span.clone())
             .await
             .map(drop)
@@ -407,7 +415,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         let span = trace::request("tasks/cancel", &request.task_id, &context);
         let result = self
             .kit
-            .cancel(bearer(&context), &request.task_id)
+            .cancel_as(&caller(&context, None), &request.task_id)
             .instrument(span.clone())
             .await
             .map(drop)
@@ -423,13 +431,12 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let bearer = bearer(&context);
         let arguments = request.arguments.unwrap_or_default();
         let long = self.kit.tool(&request.name).is_some_and(|tool| tool.long);
         if long && supports_tasks(&context) {
             let task = self
                 .kit
-                .start(&request.name, bearer, arguments)
+                .start_as(&request.name, &caller(&context, None), arguments)
                 .await
                 .or_else(refusal)?;
             return Ok(CallToolResponse::Task(CreateTaskResult::new(listed(&task))));
@@ -518,6 +525,7 @@ fn contents(uri: &str, body: Body) -> ResourceContents {
 /// What the transport knows about a request, for the kit.
 fn caller(context: &RequestContext<RoleServer>, answers: Option<InputResponses>) -> Caller<'_> {
     Caller {
+        space: identified(context),
         answers,
         bearer: bearer(context),
         cancel: Some(context.ct.clone()),
@@ -701,6 +709,23 @@ fn bearer(_context: &RequestContext<RoleServer>) -> Option<&str> {
     None
 }
 
+/// The space the HTTP layer already identified for this request, so the
+/// identity seam runs once.
+#[cfg(feature = "http")]
+fn identified(context: &RequestContext<RoleServer>) -> Option<Arc<Space>> {
+    context
+        .extensions
+        .get::<http::request::Parts>()?
+        .extensions
+        .get::<Arc<Space>>()
+        .cloned()
+}
+
+#[cfg(not(feature = "http"))]
+fn identified(_context: &RequestContext<RoleServer>) -> Option<Arc<Space>> {
+    None
+}
+
 impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, I, E, T, S> {
     /// Serves this kit over stdin and stdout until the client disconnects.
     pub async fn serve_stdio(self) -> std::io::Result<()> {
@@ -714,33 +739,162 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     }
 }
 
+/// How [`Kit::serve_http`] serves.
+#[cfg(feature = "http")]
+#[derive(Clone, Debug, Default)]
+pub struct HttpOptions {
+    /// `Host` headers accepted; empty accepts loopback hosts only, which
+    /// stops DNS rebinding against a local server.
+    pub allowed_hosts: Vec<String>,
+    /// When set, the server is an OAuth protected resource: it publishes
+    /// its metadata (RFC 9728) and answers an unidentified request with 401,
+    /// which is how an MCP client learns where to sign in.
+    pub protected: Option<ProtectedResource>,
+}
+
+/// An MCP server as an OAuth protected resource (RFC 9728).
+#[cfg(feature = "http")]
+#[derive(Clone, Debug)]
+pub struct ProtectedResource {
+    /// The server's public URL, such as `https://memory.example.com/mcp`.
+    pub resource: String,
+    /// The authorization servers that issue its tokens.
+    pub authorization_servers: Vec<String>,
+}
+
+/// The metadata a protected resource publishes (RFC 9728, section 2).
+#[cfg(feature = "http")]
+#[derive(Clone, serde::Serialize)]
+struct ResourceMetadata {
+    resource: String,
+    authorization_servers: Vec<String>,
+    scopes_supported: Vec<&'static str>,
+    bearer_methods_supported: [&'static str; 1],
+    resource_name: &'static str,
+}
+
 #[cfg(feature = "http")]
 impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, I, E, T, S> {
     /// Serves this kit as Streamable HTTP at `/mcp` on `listener`, until the
     /// listener fails.
     ///
     /// Stateless: no session outlives a request, so any instance serves any
-    /// request. Requests whose `Host` is not in `allowed_hosts` are refused,
-    /// which stops DNS rebinding against a local server.
+    /// request.
     pub async fn serve_http(
         self,
         listener: tokio::net::TcpListener,
-        allowed_hosts: &[&str],
+        options: HttpOptions,
     ) -> std::io::Result<()> {
         use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
         use rmcp::transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService,
         };
         let server = Server::new(self);
-        let config = StreamableHttpServerConfig::default()
+        let kit = server.kit.clone();
+        let mut config = StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)
-            .with_json_response(true)
-            .with_allowed_hosts(allowed_hosts.iter().copied());
+            .with_json_response(true);
+        if !options.allowed_hosts.is_empty() {
+            config = config.with_allowed_hosts(options.allowed_hosts);
+        }
         let service = StreamableHttpService::new(
             move || Ok(server.clone()),
             Arc::new(NeverSessionManager::default()),
             config,
         );
-        axum::serve(listener, axum::Router::new().nest_service("/mcp", service)).await
+        let mut router = axum::Router::new();
+        match options.protected {
+            None => router = router.nest_service("/mcp", service),
+            Some(protected) => {
+                let (path, metadata) = published(&protected, kit.manifest())?;
+                let challenge = format!(
+                    "Bearer resource_metadata=\"{}\"",
+                    protected_url(&protected.resource, &path)?
+                );
+                // Only /mcp needs an identity; the metadata is public.
+                let mcp = axum::Router::new().nest_service("/mcp", service).layer(
+                    axum::middleware::from_fn(move |request, next| {
+                        identify_request(kit.clone(), challenge.clone(), request, next)
+                    }),
+                );
+                router = router
+                    .route(
+                        &path,
+                        axum::routing::get(move || {
+                            std::future::ready(axum::Json(metadata.clone()))
+                        }),
+                    )
+                    .merge(mcp);
+            }
+        }
+        axum::serve(listener, router).await
     }
+}
+
+/// Identifies an HTTP request once, before MCP sees it: an unidentified one
+/// gets 401 with where to sign in; an identified one carries its space to
+/// the kit, which does not ask the identity seam again.
+#[cfg(feature = "http")]
+async fn identify_request<M, I, E, T, S>(
+    kit: Arc<Kit<M, I, E, T, S>>,
+    challenge: String,
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response
+where
+    M: Module,
+    I: Identity,
+    E: Entitlements,
+    T: Metering,
+    S: TaskStore,
+{
+    let bearer = request
+        .headers()
+        .get(http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    match kit.identify(bearer).await {
+        Ok(space) => {
+            request.extensions_mut().insert(space);
+            next.run(request).await
+        }
+        Err(_) => axum::response::IntoResponse::into_response((
+            http::StatusCode::UNAUTHORIZED,
+            [(http::header::WWW_AUTHENTICATE, challenge)],
+        )),
+    }
+}
+
+/// Where the metadata is published and what it says. RFC 9728 puts it at
+/// `/.well-known/oauth-protected-resource` followed by the resource's path.
+#[cfg(feature = "http")]
+fn published(
+    protected: &ProtectedResource,
+    manifest: &crate::module::Manifest,
+) -> std::io::Result<(String, ResourceMetadata)> {
+    let resource: http::Uri = protected.resource.parse().map_err(std::io::Error::other)?;
+    let path = format!(
+        "/.well-known/oauth-protected-resource{}",
+        resource.path().trim_end_matches('/')
+    );
+    let metadata = ResourceMetadata {
+        resource: protected.resource.clone(),
+        authorization_servers: protected.authorization_servers.clone(),
+        scopes_supported: manifest.scopes.clone(),
+        bearer_methods_supported: ["header"],
+        resource_name: manifest.name,
+    };
+    Ok((path, metadata))
+}
+
+/// The metadata's absolute URL: the resource's origin and `path`.
+#[cfg(feature = "http")]
+fn protected_url(resource: &str, path: &str) -> std::io::Result<String> {
+    let resource: http::Uri = resource.parse().map_err(std::io::Error::other)?;
+    let (Some(scheme), Some(authority)) = (resource.scheme_str(), resource.authority()) else {
+        return Err(std::io::Error::other(format!(
+            "the protected resource {resource} is not an absolute URL"
+        )));
+    };
+    Ok(format!("{scheme}://{authority}{path}"))
 }

@@ -56,6 +56,19 @@ pub(crate) struct Caller<'a> {
     pub progress: Option<Arc<dyn Progress>>,
     /// The user's answers to what an earlier round of this call asked.
     pub answers: Option<BTreeMap<String, Value>>,
+    /// The caller's space when the transport already identified it, so the
+    /// identity seam runs once per request.
+    pub space: Option<Arc<Space>>,
+}
+
+impl<'a> Caller<'a> {
+    /// A caller known only by its bearer token.
+    pub(crate) fn holding(bearer: Option<&'a str>) -> Self {
+        Self {
+            bearer,
+            ..Self::default()
+        }
+    }
 }
 
 impl<M: Module, I: Identity> Kit<M, I> {
@@ -144,10 +157,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
 
     /// Reads the resource at `uri` for the caller holding `bearer`.
     pub async fn read(&self, uri: &str, bearer: Option<&str>) -> Result<Body, CallError> {
-        let caller = Caller {
-            bearer,
-            ..Caller::default()
-        };
+        let caller = Caller::holding(bearer);
         self.read_as(uri, caller).await
     }
 
@@ -161,7 +171,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
                 text: app.html.to_owned(),
             });
         }
-        let space = self.identify(caller.bearer).await?;
+        let space = self.identified(&caller).await?;
         let found = self
             .core
             .routes
@@ -212,10 +222,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         bearer: Option<&str>,
         arguments: JsonObject,
     ) -> Result<Vec<Message>, CallError> {
-        let caller = Caller {
-            bearer,
-            ..Caller::default()
-        };
+        let caller = Caller::holding(bearer);
         self.prompt_as(name, caller, arguments).await
     }
 
@@ -226,7 +233,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         caller: Caller<'_>,
         arguments: JsonObject,
     ) -> Result<Vec<Message>, CallError> {
-        let space = self.identify(caller.bearer).await?;
+        let space = self.identified(&caller).await?;
         let promptable = self
             .core
             .ops
@@ -254,7 +261,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         typed: String,
         caller: Caller<'_>,
     ) -> Result<Vec<String>, CallError> {
-        let space = self.identify(caller.bearer).await?;
+        let space = self.identified(&caller).await?;
         let Some(completer) = self
             .core
             .ops
@@ -296,10 +303,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         bearer: Option<&str>,
         arguments: JsonObject,
     ) -> Result<Value, CallError> {
-        let caller = Caller {
-            bearer,
-            ..Caller::default()
-        };
+        let caller = Caller::holding(bearer);
         self.call_as(name, caller, arguments).await
     }
 
@@ -310,7 +314,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         caller: Caller<'_>,
         arguments: JsonObject,
     ) -> Result<Value, CallError> {
-        let (index, space) = self.admit(name, caller.bearer).await?;
+        let (index, space) = self.admit(name, &caller).await?;
         let ctx = Ctx::new(space, caller.cancel, caller.progress);
         self.run(index, ctx, Value::Object(arguments), caller.answers)
             .await
@@ -325,7 +329,18 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         bearer: Option<&str>,
         arguments: JsonObject,
     ) -> Result<StoredTask, CallError> {
-        let (index, space) = self.admit(name, bearer).await?;
+        self.start_as(name, &Caller::holding(bearer), arguments)
+            .await
+    }
+
+    /// [`Self::start`] with everything the transport knows about the call.
+    pub(crate) async fn start_as(
+        self: &Arc<Self>,
+        name: &str,
+        caller: &Caller<'_>,
+        arguments: JsonObject,
+    ) -> Result<StoredTask, CallError> {
+        let (index, space) = self.admit(name, caller).await?;
         let now = SystemTime::now();
         let arguments = Value::Object(arguments);
         let task = StoredTask {
@@ -357,7 +372,17 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         id: &str,
         answers: BTreeMap<String, Value>,
     ) -> Result<StoredTask, CallError> {
-        self.task(bearer, id).await?;
+        self.update_as(&Caller::holding(bearer), id, answers).await
+    }
+
+    /// [`Self::update`] with everything the transport knows about the call.
+    pub(crate) async fn update_as(
+        self: &Arc<Self>,
+        caller: &Caller<'_>,
+        id: &str,
+        answers: BTreeMap<String, Value>,
+    ) -> Result<StoredTask, CallError> {
+        self.task_as(caller, id).await?;
         let (task, resumed) = self
             .transition(id, |task| {
                 matches!(task.state, TaskState::InputRequired(_)).then(|| StoredTask {
@@ -427,7 +452,16 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
 
     /// The caller's task `id`.
     pub async fn task(&self, bearer: Option<&str>, id: &str) -> Result<StoredTask, CallError> {
-        let space = self.identify(bearer).await?;
+        self.task_as(&Caller::holding(bearer), id).await
+    }
+
+    /// [`Self::task`] with everything the transport knows about the call.
+    pub(crate) async fn task_as(
+        &self,
+        caller: &Caller<'_>,
+        id: &str,
+    ) -> Result<StoredTask, CallError> {
+        let space = self.identified(caller).await?;
         match self.tasks.get(id).await.map_err(unavailable)? {
             Some(task) if task.space == *space => Ok(task),
             // Another space's task is reported as missing, not as forbidden,
@@ -441,7 +475,16 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     /// its state is whole, and its result is discarded; the kit never stops
     /// it between two awaits.
     pub async fn cancel(&self, bearer: Option<&str>, id: &str) -> Result<StoredTask, CallError> {
-        self.task(bearer, id).await?;
+        self.cancel_as(&Caller::holding(bearer), id).await
+    }
+
+    /// [`Self::cancel`] with everything the transport knows about the call.
+    pub(crate) async fn cancel_as(
+        &self,
+        caller: &Caller<'_>,
+        id: &str,
+    ) -> Result<StoredTask, CallError> {
+        self.task_as(caller, id).await?;
         if let Some(cancel) = self.running().get(id) {
             cancel.cancel();
         }
@@ -486,6 +529,15 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         self.core.changes.subscribe()
     }
 
+    /// The caller's space: as the transport identified it, or from the
+    /// identity seam. The one way every entry point learns who is calling.
+    pub(crate) async fn identified(&self, caller: &Caller<'_>) -> Result<Arc<Space>, CallError> {
+        match &caller.space {
+            Some(space) => Ok(space.clone()),
+            None => self.identify(caller.bearer).await,
+        }
+    }
+
     pub(crate) async fn identify(&self, bearer: Option<&str>) -> Result<Arc<Space>, CallError> {
         self.identity
             .identify(bearer)
@@ -498,11 +550,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     async fn admit(
         &self,
         name: &str,
-        bearer: Option<&str>,
+        caller: &Caller<'_>,
     ) -> Result<(usize, Arc<Space>), CallError> {
         // Identity before the name, so an unidentified caller learns nothing
         // about which operations exist.
-        let space = self.identify(bearer).await?;
+        let space = self.identified(caller).await?;
         // ponytail: linear scan; a module has a handful of operations.
         let index = self
             .core

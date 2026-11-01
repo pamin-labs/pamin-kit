@@ -32,7 +32,11 @@ impl Identity for Tokens {
 pub async fn serve() -> SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    tokio::spawn(Kit::new(echo::Echo, Tokens).serve_http(listener, &["127.0.0.1"]));
+    let options = pamin_kit::HttpOptions {
+        allowed_hosts: vec!["127.0.0.1".into()],
+        protected: None,
+    };
+    tokio::spawn(Kit::new(echo::Echo, Tokens).serve_http(listener, options));
     address
 }
 
