@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use pamin_kit::{CallError, Feature, Identity, Kit, Local, Metering, Space, Usage};
 use serde_json::{Value, json};
 
-#[path = "../examples/echo.rs"]
+#[path = "../examples/echo/main.rs"]
 mod echo;
 use echo::Echo;
 

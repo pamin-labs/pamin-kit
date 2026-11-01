@@ -1,0 +1,74 @@
+---
+source: tests/conformance.rs
+expression: tools
+---
+[
+  {
+    "description": "Says the text back, with the project it was said in.",
+    "feature": "core",
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "text": {
+          "description": "What to say.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "name": "echo_say",
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "project"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Says the text back, with the project it was said in.",
+    "feature": "shout",
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "text": {
+          "description": "What to say.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "name": "echo_shout",
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "project"
+      ],
+      "type": "object"
+    }
+  }
+]

@@ -5,6 +5,8 @@
 //! each call: knowing who is calling, checking what they may use and recording
 //! usage.
 
+#[cfg(feature = "conformance")]
+pub mod conformance;
 mod kit;
 mod module;
 mod ops;

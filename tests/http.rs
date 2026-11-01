@@ -7,7 +7,7 @@ use pamin_kit::{Identity, Kit, Space};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-#[path = "../examples/echo.rs"]
+#[path = "../examples/echo/main.rs"]
 mod echo;
 
 /// Identifies only the holder of one token, so the test sees the bearer
