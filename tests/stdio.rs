@@ -1,7 +1,7 @@
 //! The example module over real stdio, driven by an MCP client.
 
 use rmcp::ServiceExt;
-use rmcp::model::CallToolRequestParams;
+use rmcp::model::{CallToolRequestParams, ReadResourceRequestParams, ResourceContents};
 use rmcp::transport::TokioChildProcess;
 use serde_json::json;
 
@@ -27,6 +27,21 @@ async fn a_client_lists_and_calls_tools_over_stdio() {
     let names: Vec<_> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     assert_eq!(names, ["echo_say", "echo_shout", "echo_wait"]);
     assert!(tools[0].output_schema.is_some());
+    let meta = tools[0].meta.as_ref().unwrap();
+    assert_eq!(meta.0["ui"]["resourceUri"], "ui://echo/said");
+
+    let page = client
+        .read_resource(ReadResourceRequestParams::new("ui://echo/said"))
+        .await
+        .unwrap();
+    let ResourceContents::TextResourceContents {
+        mime_type, text, ..
+    } = &page.contents[0]
+    else {
+        panic!("the page is not text");
+    };
+    assert_eq!(mime_type.as_deref(), Some("text/html;profile=mcp-app"));
+    assert!(text.contains("structuredContent"));
 
     let said = client
         .call_tool(

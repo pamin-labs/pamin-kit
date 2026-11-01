@@ -7,7 +7,7 @@ use std::time::{Instant, SystemTime};
 use serde_json::Value;
 
 use crate::module::{Manifest, Module};
-use crate::ops::{Ctx, JsonObject, Op, Ops, Tool};
+use crate::ops::{App, Ctx, JsonObject, Op, Ops, Tool};
 use crate::seams::{
     Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage,
 };
@@ -18,6 +18,7 @@ pub struct Kit<M, I = Local, E = Open, T = Unmetered, S = MemoryTasks> {
     module: Arc<M>,
     manifest: Manifest,
     ops: Vec<Op<M>>,
+    apps: Vec<App>,
     identity: I,
     entitlements: E,
     metering: T,
@@ -33,6 +34,7 @@ impl<M: Module, I: Identity> Kit<M, I> {
             manifest: module.manifest(),
             module: Arc::new(module),
             ops: ops.list,
+            apps: ops.apps,
             identity,
             entitlements: Open,
             metering: Unmetered,
@@ -47,6 +49,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             module: self.module,
             manifest: self.manifest,
             ops: self.ops,
+            apps: self.apps,
             identity: self.identity,
             entitlements,
             metering: self.metering,
@@ -59,6 +62,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             module: self.module,
             manifest: self.manifest,
             ops: self.ops,
+            apps: self.apps,
             identity: self.identity,
             entitlements: self.entitlements,
             metering,
@@ -71,6 +75,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             module: self.module,
             manifest: self.manifest,
             ops: self.ops,
+            apps: self.apps,
             identity: self.identity,
             entitlements: self.entitlements,
             metering: self.metering,
@@ -85,6 +90,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     /// Every registered operation, in registration order.
     pub fn tools(&self) -> impl Iterator<Item = &Tool> {
         self.ops.iter().map(|op| &op.tool)
+    }
+
+    /// Every registered MCP App page.
+    pub fn apps(&self) -> &[App] {
+        &self.apps
     }
 
     /// The registered operation `name`.

@@ -36,7 +36,8 @@ expression: tools
       ],
       "type": "object"
     },
-    "task": false
+    "task": false,
+    "ui": "ui://echo/said"
   },
   {
     "description": "Says the text back, with the project it was said in.",
@@ -71,7 +72,8 @@ expression: tools
       ],
       "type": "object"
     },
-    "task": false
+    "task": false,
+    "ui": null
   },
   {
     "description": "Waits, then says the text back.",
@@ -113,6 +115,7 @@ expression: tools
       ],
       "type": "object"
     },
-    "task": true
+    "task": true,
+    "ui": null
   }
 ]
