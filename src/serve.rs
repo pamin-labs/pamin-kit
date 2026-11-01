@@ -95,7 +95,20 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering> ServerHandler for Ser
     }
 }
 
-/// The request's bearer token: stdio carries none.
+/// The request's bearer token: present only over HTTP.
+#[cfg(feature = "http")]
+fn bearer(context: &RequestContext<RoleServer>) -> Option<&str> {
+    context
+        .extensions
+        .get::<http::request::Parts>()?
+        .headers
+        .get(http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+}
+
+#[cfg(not(feature = "http"))]
 fn bearer(_context: &RequestContext<RoleServer>) -> Option<&str> {
     None
 }
@@ -110,5 +123,36 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering> Kit<M, I, E, T> {
             .map_err(std::io::Error::other)?;
         running.waiting().await.map_err(std::io::Error::other)?;
         Ok(())
+    }
+}
+
+#[cfg(feature = "http")]
+impl<M: Module, I: Identity, E: Entitlements, T: Metering> Kit<M, I, E, T> {
+    /// Serves this kit as Streamable HTTP at `/mcp` on `listener`, until the
+    /// listener fails.
+    ///
+    /// Stateless: no session outlives a request, so any instance serves any
+    /// request. Requests whose `Host` is not in `allowed_hosts` are refused,
+    /// which stops DNS rebinding against a local server.
+    pub async fn serve_http(
+        self,
+        listener: tokio::net::TcpListener,
+        allowed_hosts: &[&str],
+    ) -> std::io::Result<()> {
+        use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
+        use rmcp::transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService,
+        };
+        let server = Server::new(self);
+        let config = StreamableHttpServerConfig::default()
+            .with_legacy_session_mode(false)
+            .with_json_response(true)
+            .with_allowed_hosts(allowed_hosts.iter().copied());
+        let service = StreamableHttpService::new(
+            move || Ok(server.clone()),
+            Arc::new(NeverSessionManager::default()),
+            config,
+        );
+        axum::serve(listener, axum::Router::new().nest_service("/mcp", service)).await
     }
 }

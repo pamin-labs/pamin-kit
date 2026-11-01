@@ -11,16 +11,24 @@ keywords = ["mcp", "modules", "framework"]
 categories = ["network-programming", "development-tools"]
 exclude = ["/.agents", "/.claude", "/.github", "/.pamin-labs-dev.toml", "/AGENTS.md", "/CLAUDE.md"]
 
+[features]
+# Streamable HTTP for hosted use. Off by default, so a local module builds
+# no HTTP server.
+http = ["dep:axum", "dep:http", "dep:tokio", "rmcp/transport-streamable-http-server"]
+
 [dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["tokio", "http1"], optional = true }
+http = { version = "=1.5.0", optional = true }
 rmcp = { version = "=3.8.0", default-features = false, features = ["server", "transport-io"] }
 schemars = "=1.2.3"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
-
-[profile.dev]
-debug = "line-tables-only"
+tokio = { version = "=1.54.1", features = ["net"], optional = true }
 
 [dev-dependencies]
 rmcp = { version = "=3.8.0", default-features = false, features = ["client", "transport-child-process"] }
 serde = { version = "=1.0.229", features = ["derive"] }
-tokio = { version = "=1.54.1", features = ["io-std", "macros", "process", "rt"] }
+tokio = { version = "=1.54.1", features = ["io-std", "io-util", "macros", "net", "process", "rt"] }
+
+[profile.dev]
+debug = "line-tables-only"
