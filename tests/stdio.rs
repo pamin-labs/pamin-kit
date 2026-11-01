@@ -45,6 +45,9 @@ async fn a_client_lists_and_calls_tools_over_stdio() {
     assert_eq!(hints.read_only_hint, Some(true));
     assert_eq!(hints.open_world_hint, Some(false));
     assert!(tools[1].annotations.is_none());
+    let unsay = tools.iter().find(|tool| tool.name == "echo_unsay").unwrap();
+    let meta = unsay.meta.as_ref().unwrap();
+    assert_eq!(meta.0["ui"]["visibility"], json!(["app"]));
     let meta = tools[0].meta.as_ref().unwrap();
     assert_eq!(meta.0["ui"]["resourceUri"], "ui://echo/said");
 

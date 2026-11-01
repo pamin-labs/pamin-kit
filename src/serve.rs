@@ -16,11 +16,11 @@ use rmcp::model::{
     TaskPayload, TaskStatus, ToolAnnotations,
 };
 use rmcp::model::{
-    ClientCapabilities, CompleteRequestParams, CompleteResult, CompletionInfo, ElicitRequest,
-    ElicitRequestParams, ElicitationSchema, GetPromptRequestParams, GetPromptResponse,
-    GetPromptResult, InputRequest, InputRequests, InputRequiredResult, InputResponses,
-    ListPromptsResult, ProgressNotificationParam, ProgressToken, PromptMessage, ProtocolVersion,
-    UpdateTaskParams,
+    ClientCapabilities, ClientResult, CompleteRequestParams, CompleteResult, CompletionInfo,
+    ElicitRequest, ElicitRequestParams, ElicitationSchema, GetPromptRequestParams,
+    GetPromptResponse, GetPromptResult, InputRequest, InputRequests, InputRequiredResult,
+    InputResponses, ListPromptsResult, ProgressNotificationParam, ProgressToken, PromptMessage,
+    ProtocolVersion, ServerRequest, UpdateTaskParams,
 };
 use rmcp::model::{
     ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ResourcesCapability,
@@ -39,11 +39,17 @@ use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
 use crate::trace;
 
 /// A tool's `_meta` naming the MCP App that shows its results.
-fn ui(uri: &str) -> JsonObject {
-    let Value::Object(meta) = serde_json::json!({"ui": {"resourceUri": uri}}) else {
-        unreachable!()
-    };
-    meta
+/// A tool's MCP Apps `_meta`: the page that shows its results, and whether
+/// only an app may call it. `None` when it has neither.
+fn ui(tool: &crate::ops::Tool) -> Option<JsonObject> {
+    let mut ui = JsonObject::new();
+    if let Some(uri) = tool.ui {
+        ui.insert("resourceUri".into(), uri.into());
+    }
+    if tool.app_only {
+        ui.insert("visibility".into(), serde_json::json!(["app"]));
+    }
+    (!ui.is_empty()).then(|| JsonObject::from_iter([("ui".to_owned(), Value::Object(ui))]))
 }
 
 /// A tool with its hints as MCP annotations.
@@ -159,8 +165,8 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<
                     None => listed,
                 };
                 let listed = shown!(listed, &tool.looks);
-                let listed = match tool.ui {
-                    Some(uri) => listed.with_meta(MetaObject(ui(uri))),
+                let listed = match ui(tool) {
+                    Some(meta) => listed.with_meta(MetaObject(meta)),
                     None => listed,
                 };
                 match tool.hints {
@@ -749,11 +755,22 @@ where
         let given = answers.get_or_insert_with(InputResponses::new);
         for ask in asked {
             let (key, form) = form(ask).map_err(|error| CallError::Failed(error.message.into()))?;
-            let answer = context
-                .peer
-                .create_elicitation(form)
-                .await
-                .map_err(|error| CallError::Failed(format!("asking the user failed: {error}")))?;
+            // The request rmcp's `elicitation` feature would send, without the
+            // URL parser it brings for nothing the kit uses.
+            let asking = ServerRequest::ElicitRequest(ElicitRequest::new(form));
+            let answer = match context.peer.send_request(asking).await {
+                Ok(ClientResult::ElicitResult(answer)) => answer,
+                Ok(_) => {
+                    return Err(CallError::Failed(
+                        "the client answered something else".into(),
+                    ));
+                }
+                Err(error) => {
+                    return Err(CallError::Failed(format!(
+                        "asking the user failed: {error}"
+                    )));
+                }
+            };
             let answer = serde_json::to_value(answer)
                 .map_err(|error| CallError::Failed(error.to_string()))?;
             given.insert(key, answer);

@@ -320,6 +320,9 @@ pub struct Tool {
     pub long: bool,
     /// The MCP App that shows this tool's results: a `ui://` resource.
     pub ui: Option<&'static str>,
+    /// Called by an MCP App only, such as an undo button, and kept from the
+    /// model.
+    pub app_only: bool,
     /// What a host may assume about the tool, when the module says.
     pub hints: Option<Hints>,
     pub looks: Looks,
@@ -763,6 +766,18 @@ impl<M: Send + Sync + 'static> Ops<M> {
         self
     }
 
+    /// Keeps `tool` from the model: only an MCP App calls it, such as the
+    /// undo button on a page that shows what another tool did. It is still
+    /// identified, entitled and metered like any call.
+    ///
+    /// # Panics
+    ///
+    /// When `tool` is not registered yet.
+    pub fn app_only(&mut self, tool: &str) -> &mut Self {
+        self.registered(tool).app_only = true;
+        self
+    }
+
     /// Tells hosts what they may assume about `tool`.
     ///
     /// # Panics
@@ -857,6 +872,7 @@ impl<M: Send + Sync + 'static> Ops<M> {
                 output,
                 long,
                 ui: None,
+                app_only: false,
                 hints: None,
                 looks: Looks::default(),
             },

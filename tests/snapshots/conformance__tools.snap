@@ -56,6 +56,7 @@ expression: tools
   ],
   "tools": [
     {
+      "app_only": false,
       "description": "Says the text back, with the project it was said in.",
       "feature": "core",
       "hints": {
@@ -105,6 +106,7 @@ expression: tools
       "ui": "ui://echo/said"
     },
     {
+      "app_only": false,
       "description": "Says the text back, with the project it was said in.",
       "feature": "shout",
       "hints": null,
@@ -149,6 +151,7 @@ expression: tools
       "ui": null
     },
     {
+      "app_only": false,
       "description": "Draws a dot: one black pixel, as a PNG image.",
       "feature": "core",
       "hints": null,
@@ -169,6 +172,28 @@ expression: tools
       "ui": null
     },
     {
+      "app_only": true,
+      "description": "Takes back what was said: the undo button on the said page.",
+      "feature": "core",
+      "hints": null,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object"
+      },
+      "looks": {
+        "audience": [],
+        "icons": [],
+        "mime": null,
+        "priority": null,
+        "title": null
+      },
+      "name": "echo_unsay",
+      "output": null,
+      "task": false,
+      "ui": null
+    },
+    {
+      "app_only": false,
       "description": "Sends the user to echo's web page, and says whether they went.",
       "feature": "core",
       "hints": null,
@@ -189,6 +214,7 @@ expression: tools
       "ui": null
     },
     {
+      "app_only": false,
       "description": "Asks the user before saying the text back.",
       "feature": "core",
       "hints": null,
@@ -233,6 +259,7 @@ expression: tools
       "ui": null
     },
     {
+      "app_only": false,
       "description": "Waits, then says the text back.",
       "feature": "core",
       "hints": null,

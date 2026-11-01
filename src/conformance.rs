@@ -133,6 +133,7 @@ pub fn check<M: Module>(module: M, skill: &Path) -> Value {
                 "output": tool.output.as_deref(),
                 "task": tool.long,
                 "ui": tool.ui,
+                "app_only": tool.app_only,
                 "hints": tool.hints,
                 "looks": tool.looks,
             })

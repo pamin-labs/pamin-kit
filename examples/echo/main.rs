@@ -34,6 +34,10 @@ pub struct SayUri {
     text: String,
 }
 
+/// Takes back what was said: the undo button on the said page.
+#[derive(Deserialize, JsonSchema)]
+pub struct Unsay {}
+
 /// Draws a dot: one black pixel, as a PNG image.
 #[derive(Deserialize, JsonSchema)]
 pub struct Dot {}
@@ -164,6 +168,12 @@ impl Module for Echo {
                 Ok::<_, String>(())
             },
         )
+        .tool(
+            "echo_unsay",
+            Feature::Core,
+            |_: Arc<Self>, _: Ctx, _: Unsay| async { Ok::<_, String>(()) },
+        )
+        .app_only("echo_unsay")
         .tool(
             "echo_visit",
             Feature::Core,
