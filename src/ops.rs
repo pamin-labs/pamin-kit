@@ -50,6 +50,15 @@ pub struct Tool {
     pub output: Option<Arc<JsonObject>>,
     /// Runs as a task for callers that support tasks.
     pub long: bool,
+    /// The MCP App that shows this tool's results: a `ui://` resource.
+    pub ui: Option<&'static str>,
+}
+
+/// An HTML page a host renders as an MCP App, served as a resource.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct App {
+    pub uri: &'static str,
+    pub html: &'static str,
 }
 
 /// One registered operation.
@@ -61,11 +70,15 @@ pub(crate) struct Op<M> {
 /// The operations a module registers.
 pub struct Ops<M> {
     pub(crate) list: Vec<Op<M>>,
+    pub(crate) apps: Vec<App>,
 }
 
 impl<M: Send + Sync + 'static> Ops<M> {
     pub(crate) fn new() -> Self {
-        Self { list: Vec::new() }
+        Self {
+            list: Vec::new(),
+            apps: Vec::new(),
+        }
     }
 
     /// Registers an operation served as the MCP tool `name`, callable by
@@ -108,6 +121,33 @@ impl<M: Send + Sync + 'static> Ops<M> {
         Fut: Future<Output = Result<R, E>> + Send + 'static,
     {
         self.add(name, feature, true, handler)
+    }
+
+    /// Shows `tool`'s results as an MCP App in hosts that render them (Claude,
+    /// ChatGPT, VS Code): the HTML page `html`, served as the resource
+    /// `uri`. The page receives the tool's structured result from the host.
+    /// Tools may share one page.
+    ///
+    /// # Panics
+    ///
+    /// When `tool` is not registered yet, `uri` is not a `ui://` URI, or
+    /// `uri` already serves a different page.
+    pub fn app(&mut self, tool: &str, uri: &'static str, html: &'static str) -> &mut Self {
+        assert!(
+            uri.starts_with("ui://"),
+            "the app {uri} must be a ui:// URI"
+        );
+        let op = self
+            .list
+            .iter_mut()
+            .find(|op| op.tool.name == tool)
+            .unwrap_or_else(|| panic!("register {tool} before its app"));
+        op.tool.ui = Some(uri);
+        match self.apps.iter().find(|app| app.uri == uri) {
+            Some(app) => assert_eq!(app.html, html, "{uri} already serves another page"),
+            None => self.apps.push(App { uri, html }),
+        }
+        self
     }
 
     fn add<A, R, E, F, Fut>(
@@ -158,6 +198,7 @@ impl<M: Send + Sync + 'static> Ops<M> {
                 input: Arc::new(input),
                 output,
                 long,
+                ui: None,
             },
             call,
         });

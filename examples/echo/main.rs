@@ -1,5 +1,5 @@
-//! The smallest module: a free, a paid and a long operation, served over
-//! stdio.
+//! The smallest module: a free, a paid and a long operation, and an MCP App
+//! that shows what was said, served over stdio.
 //!
 //! The kit's own tests use it, so it stays a working example.
 
@@ -81,7 +81,8 @@ impl Module for Echo {
             "echo_wait",
             Feature::Core,
             |m: Arc<Self>, ctx: Ctx, a: Wait| async move { m.wait(ctx.space(), a).await },
-        );
+        )
+        .app("echo_say", "ui://echo/said", include_str!("said.html"));
     }
 }
 

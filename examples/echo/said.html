@@ -1,0 +1,11 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Said</title>
+<p id="said"></p>
+<script>
+  // The host posts the tool's result to the page (MCP Apps).
+  addEventListener("message", (event) => {
+    const result = event.data?.params?.structuredContent;
+    if (result) document.getElementById("said").textContent = `${result.text} (${result.project})`;
+  });
+</script>

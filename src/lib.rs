@@ -16,7 +16,7 @@ mod tasks;
 
 pub use kit::{CallError, Kit};
 pub use module::{Audience, Hardware, Manifest, Module, Routing};
-pub use ops::{Ctx, JsonObject, Ops, Tool};
+pub use ops::{App, Ctx, JsonObject, Ops, Tool};
 /// The schema generator contract types derive with, re-exported so a module
 /// and the kit cannot disagree on its version.
 pub use schemars;

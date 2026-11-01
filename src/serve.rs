@@ -7,8 +7,10 @@ use rmcp::ErrorData;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock,
-    CreateTaskResult, DetailedTask, GetTaskParams, GetTaskResult, Implementation, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerConfig, Task, TaskPayload, TaskStatus,
+    CreateTaskResult, DetailedTask, GetTaskParams, GetTaskResult, Implementation, JsonObject,
+    ListResourcesResult, ListToolsResult, MetaObject, PaginatedRequestParams,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+    ResourceContents, ServerCapabilities, ServerConfig, Task, TaskPayload, TaskStatus,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::Value;
@@ -17,6 +19,17 @@ use crate::kit::{CallError, Kit};
 use crate::module::Module;
 use crate::seams::{Entitlements, Identity, Metering};
 use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
+
+/// The MIME type MCP Apps hosts render.
+const APP_MIME: &str = "text/html;profile=mcp-app";
+
+/// A tool's `_meta` naming the MCP App that shows its results.
+fn ui(uri: &str) -> JsonObject {
+    let Value::Object(meta) = serde_json::json!({"ui": {"resourceUri": uri}}) else {
+        unreachable!()
+    };
+    meta
+}
 
 /// How often a caller should poll a task, in milliseconds.
 const POLL_MS: u64 = 500;
@@ -47,8 +60,12 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<
                     tool.description.clone().map(Into::into),
                     tool.input.clone(),
                 );
-                match &tool.output {
+                let listed = match &tool.output {
                     Some(output) => listed.with_raw_output_schema(output.clone()),
+                    None => listed,
+                };
+                match tool.ui {
+                    Some(uri) => listed.with_meta(MetaObject(ui(uri))),
                     None => listed,
                 }
             })
@@ -65,12 +82,16 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
 {
     fn get_info(&self) -> ServerConfig {
         let manifest = self.kit.manifest();
-        let capabilities = ServerCapabilities::builder().enable_tools();
-        let capabilities = if self.kit.tools().any(|tool| tool.long) {
-            capabilities.enable_tasks().build()
-        } else {
-            capabilities.build()
-        };
+        let mut capabilities = ServerCapabilities::builder().enable_tools().build();
+        if !self.kit.apps().is_empty() {
+            capabilities.resources = Some(Default::default());
+        }
+        if self.kit.tools().any(|tool| tool.long) {
+            capabilities.extensions = ServerCapabilities::builder()
+                .enable_tasks()
+                .build()
+                .extensions;
+        }
         ServerConfig::new(capabilities).with_server_info(Implementation::new(
             manifest.name,
             manifest.contract_version,
@@ -83,6 +104,36 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult::with_all_items(self.tools.to_vec()))
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        let pages = self
+            .kit
+            .apps()
+            .iter()
+            .map(|app| Resource::new(app.uri, app.uri).with_mime_type(APP_MIME));
+        Ok(ListResourcesResult::with_all_items(pages.collect()))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        // A page is the module's code, the same for every caller; the data it
+        // shows arrives through tool calls, which are identified.
+        let app = self
+            .kit
+            .apps()
+            .iter()
+            .find(|app| app.uri == request.uri)
+            .ok_or_else(|| ErrorData::resource_not_found(request.uri.clone(), None))?;
+        let page = ResourceContents::text(app.html, app.uri).with_mime_type(APP_MIME);
+        Ok(ReadResourceResult::new(vec![page]).into())
     }
 
     async fn call_tool(
