@@ -26,6 +26,18 @@ pamin-kit sits beside the adapters: Module trait, serving, seams, Tasks, MCP App
 - **UI travels with the tool** as an MCP Apps resource, so every host renders it the same way.
 - **Paid behaviour is composed, not flagged.** Open-source crates expose a few explicit extension points; private crates plug into them at build time. Plans and licences are entitlements checked at run time.
 
+## Serving a product as MCP with the kit
+
+The kit's `README.md` lists every registration, context method, seam and feature; [`examples/echo`](../../../examples/echo/main.rs) uses each of them. The steps:
+
+1. **Contract crate:** one `Deserialize + JsonSchema` arguments type per operation, its doc comment the description a model reads; results `Serialize + JsonSchema`. No tenant, user or project fields.
+2. **`impl Module`:** the manifest, then `register`: `ops.tool` for quick operations, `ops.task` for long ones (and `long_running: true`), `resource`, `prompt`, `complete`, `app` as the product needs. Names: tools and prompts `<module>_<action>`, resources `<module>://...`, app pages `ui://<module>/...`.
+3. **Handlers call the engine** with `ctx.space()`; they check `ctx.is_cancelled()` between steps of long work, report `ctx.progress`, `ctx.ask` before anything the user must confirm, `ctx.updated(uri)` after changing what a resource shows, and `ctx.attach` for images or links beside the result.
+4. **Binary:** `Kit::new(module, Local::from_working_directory()?).serve_stdio()` locally; hosted, the platform's seams with `serve_http` (feature `http`).
+5. **CI:** `pamin_kit::conformance!(Module, "SKILL.md")` in a test, with feature `conformance` in dev-dependencies; review the snapshot it writes.
+
+Anything an MCP feature needs belongs in the kit, never in the product: if the kit lacks it, add it to the kit for every module.
+
 ## Changing a contract
 
 - Additive only within a major version: new optional fields pass; removing a field or changing a type or meaning needs a new major contract version.
@@ -36,5 +48,5 @@ pamin-kit sits beside the adapters: Module trait, serving, seams, Tasks, MCP App
 ## Done means
 
 - Conformance suite passes; schema snapshots reviewed.
-- Hosts (gateway, Tala) needed no code change.
+- Hosts and the gateway needed no code change.
 - Latency of the operation through the kit measured against calling the engine directly; the kit's overhead stays under its budget.
