@@ -11,7 +11,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::module::{Manifest, Module};
-use crate::ops::{App, Ctx, JsonObject, Ops, Progress, Tool};
+use crate::ops::{APP_MIME, App, Body, Ctx, JsonObject, Ops, Progress, Resource, Tool};
 use crate::seams::{
     Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage,
 };
@@ -32,6 +32,8 @@ struct Core<M> {
     module: Arc<M>,
     manifest: Manifest,
     ops: Ops<M>,
+    /// Which resource a URI reads: an index into `ops.resources`.
+    routes: matchit::Router<usize>,
     /// Tasks running in this process, to stop when a caller cancels one.
     running: Mutex<HashMap<String, CancellationToken>>,
 }
@@ -52,11 +54,19 @@ impl<M: Module, I: Identity> Kit<M, I> {
     pub fn new(module: M, identity: I) -> Self {
         let mut ops = Ops::new();
         module.register(&mut ops);
+        let mut routes = matchit::Router::new();
+        for (index, readable) in ops.resources.iter().enumerate() {
+            let uri = readable.resource.uri;
+            if let Err(error) = routes.insert(uri, index) {
+                panic!("resource {uri} cannot be routed: {error}");
+            }
+        }
         Self {
             core: Core {
                 manifest: module.manifest(),
                 module: Arc::new(module),
                 ops,
+                routes,
                 running: Mutex::default(),
             },
             identity,
@@ -115,6 +125,66 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     /// Every registered MCP App page.
     pub fn apps(&self) -> &[App] {
         &self.core.ops.apps
+    }
+
+    /// Every registered resource and resource template.
+    pub fn resources(&self) -> impl Iterator<Item = &Resource> {
+        self.core.ops.resources.iter().map(|r| &r.resource)
+    }
+
+    /// Reads the resource at `uri` for the caller holding `bearer`.
+    pub async fn read(&self, uri: &str, bearer: Option<&str>) -> Result<Body, CallError> {
+        let caller = Caller {
+            bearer,
+            ..Caller::default()
+        };
+        self.read_as(uri, caller).await
+    }
+
+    /// [`Self::read`] with everything the transport knows about the read.
+    pub(crate) async fn read_as(&self, uri: &str, caller: Caller<'_>) -> Result<Body, CallError> {
+        // An app page is the module's code, the same for every caller; the
+        // data it shows arrives through identified tool calls.
+        if let Some(app) = self.apps().iter().find(|app| app.uri == uri) {
+            return Ok(Body::Text {
+                mime: APP_MIME,
+                text: app.html.to_owned(),
+            });
+        }
+        let space = self.identify(caller.bearer).await?;
+        let found = self
+            .core
+            .routes
+            .at(uri)
+            .map_err(|_| CallError::Unknown(uri.to_owned()))?;
+        let readable = &self.core.ops.resources[*found.value];
+        let Resource {
+            uri: template,
+            feature,
+            ..
+        } = readable.resource;
+        if !self.entitlements.allows(&space, feature) {
+            return Err(CallError::NotEntitled(feature));
+        }
+        let variables = if found.params.is_empty() {
+            Value::Null
+        } else {
+            found
+                .params
+                .iter()
+                .map(|(name, value)| {
+                    let value = percent_encoding::percent_decode_str(value).decode_utf8_lossy();
+                    (name.to_owned(), Value::String(value.into_owned()))
+                })
+                .collect::<JsonObject>()
+                .into()
+        };
+        let ctx = Ctx::new(space, caller.cancel, caller.progress);
+        self.metered(template, feature, ctx, |ctx| {
+            (readable.read)(self.core.module.clone(), ctx, variables)
+        })
+        .await
+        .map_err(CallError::Failed)
     }
 
     /// The registered operation `name`.
@@ -281,14 +351,32 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     /// Runs an admitted operation and meters it.
     async fn run(&self, index: usize, ctx: Ctx, arguments: Value) -> Result<Value, String> {
         let op = &self.core.ops.list[index];
-        let space = ctx.space().clone();
+        self.metered(op.tool.name, op.tool.feature, ctx, |ctx| {
+            (op.call)(self.core.module.clone(), ctx, arguments)
+        })
+        .await
+    }
+
+    /// Runs `work` and records its usage as `operation`: one place for
+    /// tools, resources and prompts.
+    async fn metered<V, Fut>(
+        &self,
+        operation: &'static str,
+        feature: Feature,
+        ctx: Ctx,
+        work: impl FnOnce(Ctx) -> Fut,
+    ) -> Result<V, String>
+    where
+        Fut: Future<Output = Result<V, String>>,
+    {
+        let space = ctx.shared_space();
         let started = Instant::now();
-        let result = (op.call)(self.core.module.clone(), ctx, arguments).await;
+        let result = work(ctx).await;
         self.metering.record(
             &space,
             Usage {
-                operation: op.tool.name,
-                feature: op.tool.feature,
+                operation,
+                feature,
                 elapsed: started.elapsed(),
                 ok: result.is_ok(),
             },

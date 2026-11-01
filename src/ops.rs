@@ -55,6 +55,11 @@ impl Ctx {
         &self.space
     }
 
+    /// The space shared, for the kit to keep past the call without copying.
+    pub(crate) fn shared_space(&self) -> Arc<Space> {
+        self.space.clone()
+    }
+
     /// Whether the caller cancelled the call. An operation checks this
     /// between steps and stops where its state is whole; the kit never
     /// stops it half way.
@@ -163,6 +168,40 @@ impl Default for Hints {
     }
 }
 
+/// A resource a module serves: data a host or model reads by URI. With
+/// `{name}` variables in its URI it is a template, read at any URI that
+/// matches.
+#[derive(Clone, Debug)]
+pub struct Resource {
+    pub uri: &'static str,
+    pub name: &'static str,
+    pub feature: Feature,
+    /// The variables type's doc comment, for a template.
+    pub description: Option<String>,
+}
+
+impl Resource {
+    pub fn is_template(&self) -> bool {
+        self.uri.contains('{')
+    }
+}
+
+/// What reading a resource returns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Body {
+    Text { mime: &'static str, text: String },
+    Bytes { mime: &'static str, bytes: Vec<u8> },
+}
+
+/// One registered resource.
+pub(crate) struct Readable<M> {
+    pub resource: Resource,
+    pub read: Handler<M, Body>,
+}
+
+/// The MIME type MCP Apps hosts render.
+pub(crate) const APP_MIME: &str = "text/html;profile=mcp-app";
+
 /// An HTML page a host renders as an MCP App, served as a resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct App {
@@ -179,6 +218,7 @@ pub(crate) struct Op<M> {
 /// The operations a module registers.
 pub struct Ops<M> {
     pub(crate) list: Vec<Op<M>>,
+    pub(crate) resources: Vec<Readable<M>>,
     pub(crate) apps: Vec<App>,
     pub(crate) instructions: Option<&'static str>,
 }
@@ -187,6 +227,7 @@ impl<M: Send + Sync + 'static> Ops<M> {
     pub(crate) fn new() -> Self {
         Self {
             list: Vec::new(),
+            resources: Vec::new(),
             apps: Vec::new(),
             instructions: None,
         }
@@ -253,6 +294,45 @@ impl<M: Send + Sync + 'static> Ops<M> {
             Some(app) => assert_eq!(app.html, html, "{uri} already serves another page"),
             None => self.apps.push(App { uri, html }),
         }
+        self
+    }
+
+    /// Registers a resource at `uri`, readable by spaces entitled to
+    /// `feature`. A URI with `{name}` variables is a template: the handler
+    /// receives the variables, percent-decoded, as `A`, and `A`'s doc
+    /// comment describes the template. A plain URI takes `A = ()` and is
+    /// listed.
+    ///
+    /// # Panics
+    ///
+    /// When `uri` is registered twice or is not a valid template.
+    pub fn resource<A, E, F, Fut>(
+        &mut self,
+        uri: &'static str,
+        name: &'static str,
+        feature: Feature,
+        handler: F,
+    ) -> &mut Self
+    where
+        A: DeserializeOwned + JsonSchema + 'static,
+        E: std::fmt::Display,
+        F: Fn(Arc<M>, Ctx, A) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Body, E>> + Send + 'static,
+    {
+        assert!(
+            self.resources.iter().all(|r| r.resource.uri != uri),
+            "resource {uri} is registered twice"
+        );
+        let description = take_text(&mut JsonObject::clone(&schema_for_type::<A>()));
+        self.resources.push(Readable {
+            resource: Resource {
+                uri,
+                name,
+                feature,
+                description,
+            },
+            read: erase(handler, Ok),
+        });
         self
     }
 

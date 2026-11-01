@@ -10,10 +10,10 @@ use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock,
     CreateTaskResult, DetailedTask, GetTaskParams, GetTaskResult, Implementation, JsonObject,
-    ListResourcesResult, ListToolsResult, MetaObject, PaginatedRequestParams,
-    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, ServerCapabilities, ServerConfig, Task, TaskPayload, TaskStatus,
-    ToolAnnotations,
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, MetaObject,
+    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
+    Resource, ResourceContents, ResourceTemplate, ServerCapabilities, ServerConfig, Task,
+    TaskPayload, TaskStatus, ToolAnnotations,
 };
 use rmcp::model::{ProgressNotificationParam, ProgressToken};
 use rmcp::service::{RequestContext, RoleServer};
@@ -22,13 +22,10 @@ use tracing::Instrument;
 
 use crate::kit::{CallError, Caller, Kit};
 use crate::module::Module;
-use crate::ops::{Hints, Progress};
+use crate::ops::{APP_MIME, Body, Hints, Progress};
 use crate::seams::{Entitlements, Identity, Metering};
 use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
 use crate::trace;
-
-/// The MIME type MCP Apps hosts render.
-const APP_MIME: &str = "text/html;profile=mcp-app";
 
 /// A tool's `_meta` naming the MCP App that shows its results.
 fn ui(uri: &str) -> JsonObject {
@@ -111,7 +108,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
     fn get_info(&self) -> ServerConfig {
         let manifest = self.kit.manifest();
         let mut capabilities = ServerCapabilities::builder().enable_tools().build();
-        if !self.kit.apps().is_empty() {
+        if !self.kit.apps().is_empty() || self.kit.resources().next().is_some() {
             capabilities.resources = Some(Default::default());
         }
         if self.kit.tools().any(|tool| tool.long) {
@@ -148,24 +145,55 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
             .apps()
             .iter()
             .map(|app| Resource::new(app.uri, app.uri).with_mime_type(APP_MIME));
-        Ok(ListResourcesResult::with_all_items(pages.collect()))
+        let resources = self
+            .kit
+            .resources()
+            .filter(|resource| !resource.is_template())
+            .map(|resource| Resource::new(resource.uri, resource.name));
+        Ok(ListResourcesResult::with_all_items(
+            pages.chain(resources).collect(),
+        ))
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        let templates = self
+            .kit
+            .resources()
+            .filter(|resource| resource.is_template())
+            .map(|resource| {
+                let template = ResourceTemplate::new(resource.uri, resource.name);
+                match &resource.description {
+                    Some(text) => template.with_description(text),
+                    None => template,
+                }
+            });
+        Ok(ListResourceTemplatesResult::with_all_items(
+            templates.collect(),
+        ))
     }
 
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        // A page is the module's code, the same for every caller; the data it
-        // shows arrives through tool calls, which are identified.
-        let app = self
+        let span = trace::request("resources/read", &request.uri, &context);
+        let result = self
             .kit
-            .apps()
-            .iter()
-            .find(|app| app.uri == request.uri)
-            .ok_or_else(|| ErrorData::resource_not_found(request.uri.clone(), None))?;
-        let page = ResourceContents::text(app.html, app.uri).with_mime_type(APP_MIME);
-        Ok(ReadResourceResult::new(vec![page]).into())
+            .read_as(&request.uri, caller(&context))
+            .instrument(span.clone())
+            .await
+            .map(|body| ReadResourceResult::new(vec![contents(&request.uri, body)]).into())
+            .or_else(|error| match error {
+                CallError::Unknown(uri) => Err(ErrorData::resource_not_found(uri, None)),
+                error => refusal(error),
+            });
+        trace::outcome(&span, &result);
+        result
     }
 
     async fn call_tool(
@@ -231,23 +259,43 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<
                 .or_else(refusal)?;
             return Ok(CallToolResponse::Task(CreateTaskResult::new(listed(&task))));
         }
-        let caller = Caller {
-            bearer,
-            cancel: context.ct.clone(),
-            progress: context.meta.get_progress_token().map(|token| {
-                Arc::new(PeerProgress {
-                    peer: context.peer.clone(),
-                    token,
-                }) as Arc<dyn Progress>
-            }),
-        };
-        match self.kit.call_as(&request.name, caller, arguments).await {
+        match self
+            .kit
+            .call_as(&request.name, caller(&context), arguments)
+            .await
+        {
             Ok(value) => Ok(CallToolResult::structured(value).into()),
             Err(error @ (CallError::NotEntitled(_) | CallError::Failed(_))) => {
                 Ok(tool_error(error).into())
             }
             Err(error) => refusal(error),
         }
+    }
+}
+
+/// A resource's body as MCP resource contents.
+fn contents(uri: &str, body: Body) -> ResourceContents {
+    match body {
+        Body::Text { mime, text } => ResourceContents::text(text, uri).with_mime_type(mime),
+        Body::Bytes { mime, bytes } => {
+            use base64::Engine;
+            let blob = base64::engine::general_purpose::STANDARD.encode(bytes);
+            ResourceContents::blob(blob, uri).with_mime_type(mime)
+        }
+    }
+}
+
+/// What the transport knows about a request, for the kit.
+fn caller(context: &RequestContext<RoleServer>) -> Caller<'_> {
+    Caller {
+        bearer: bearer(context),
+        cancel: context.ct.clone(),
+        progress: context.meta.get_progress_token().map(|token| {
+            Arc::new(PeerProgress {
+                peer: context.peer.clone(),
+                token,
+            }) as Arc<dyn Progress>
+        }),
     }
 }
 

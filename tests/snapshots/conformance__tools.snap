@@ -2,129 +2,145 @@
 source: tests/conformance.rs
 expression: tools
 ---
-[
-  {
-    "description": "Says the text back, with the project it was said in.",
-    "feature": "core",
-    "hints": {
-      "destructive": true,
-      "idempotent": true,
-      "open_world": false,
-      "read_only": true,
-      "title": "Say"
+{
+  "resources": [
+    {
+      "description": null,
+      "feature": "core",
+      "name": "About echo",
+      "uri": "echo://about"
     },
-    "input": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "text": {
-          "description": "What to say.",
-          "type": "string"
-        }
+    {
+      "description": "Text to say, as a resource: what reading it would say back.",
+      "feature": "core",
+      "name": "Said",
+      "uri": "echo://say/{text}"
+    }
+  ],
+  "tools": [
+    {
+      "description": "Says the text back, with the project it was said in.",
+      "feature": "core",
+      "hints": {
+        "destructive": true,
+        "idempotent": true,
+        "open_world": false,
+        "read_only": true,
+        "title": "Say"
       },
-      "required": [
-        "text"
-      ],
-      "type": "object"
-    },
-    "name": "echo_say",
-    "output": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "project": {
-          "type": "string"
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "text": {
+            "description": "What to say.",
+            "type": "string"
+          }
         },
-        "text": {
-          "type": "string"
-        }
+        "required": [
+          "text"
+        ],
+        "type": "object"
       },
-      "required": [
-        "text",
-        "project"
-      ],
-      "type": "object"
-    },
-    "task": false,
-    "ui": "ui://echo/said"
-  },
-  {
-    "description": "Says the text back, with the project it was said in.",
-    "feature": "shout",
-    "hints": null,
-    "input": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "text": {
-          "description": "What to say.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "text"
-      ],
-      "type": "object"
-    },
-    "name": "echo_shout",
-    "output": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "project": {
-          "type": "string"
+      "name": "echo_say",
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
         },
-        "text": {
-          "type": "string"
-        }
+        "required": [
+          "text",
+          "project"
+        ],
+        "type": "object"
       },
-      "required": [
-        "text",
-        "project"
-      ],
-      "type": "object"
+      "task": false,
+      "ui": "ui://echo/said"
     },
-    "task": false,
-    "ui": null
-  },
-  {
-    "description": "Waits, then says the text back.",
-    "feature": "core",
-    "hints": null,
-    "input": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "millis": {
-          "description": "How long to wait first, in milliseconds.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
+    {
+      "description": "Says the text back, with the project it was said in.",
+      "feature": "shout",
+      "hints": null,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "text": {
+            "description": "What to say.",
+            "type": "string"
+          }
         },
-        "text": {
-          "description": "What to say.",
-          "type": "string"
-        }
+        "required": [
+          "text"
+        ],
+        "type": "object"
       },
-      "required": [
-        "text",
-        "millis"
-      ],
-      "type": "object"
-    },
-    "name": "echo_wait",
-    "output": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "project": {
-          "type": "string"
+      "name": "echo_shout",
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
         },
-        "text": {
-          "type": "string"
-        }
+        "required": [
+          "text",
+          "project"
+        ],
+        "type": "object"
       },
-      "required": [
-        "text",
-        "project"
-      ],
-      "type": "object"
+      "task": false,
+      "ui": null
     },
-    "task": true,
-    "ui": null
-  }
-]
+    {
+      "description": "Waits, then says the text back.",
+      "feature": "core",
+      "hints": null,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "millis": {
+            "description": "How long to wait first, in milliseconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "description": "What to say.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "millis"
+        ],
+        "type": "object"
+      },
+      "name": "echo_wait",
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "project"
+        ],
+        "type": "object"
+      },
+      "task": true,
+      "ui": null
+    }
+  ]
+}
