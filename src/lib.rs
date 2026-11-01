@@ -13,6 +13,7 @@ mod ops;
 mod seams;
 mod serve;
 mod tasks;
+mod trace;
 
 pub use kit::{CallError, Kit};
 pub use module::{Audience, Hardware, Manifest, Module, Routing};

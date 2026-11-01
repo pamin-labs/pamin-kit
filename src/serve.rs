@@ -14,11 +14,13 @@ use rmcp::model::{
 };
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::Value;
+use tracing::Instrument;
 
 use crate::kit::{CallError, Kit};
 use crate::module::Module;
 use crate::seams::{Entitlements, Identity, Metering};
 use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
+use crate::trace;
 
 /// The MIME type MCP Apps hosts render.
 const APP_MIME: &str = "text/html;profile=mcp-app";
@@ -141,6 +143,53 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let span = trace::request("tools/call", &request.name, &context);
+        let result = self.call(request, context).instrument(span.clone()).await;
+        trace::outcome(&span, &result);
+        result
+    }
+
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetTaskResult, ErrorData> {
+        let span = trace::request("tasks/get", &request.task_id, &context);
+        let result = self
+            .kit
+            .task(bearer(&context), &request.task_id)
+            .instrument(span.clone())
+            .await
+            .map(|task| GetTaskResult::new(detailed(task)))
+            .or_else(refusal);
+        trace::outcome(&span, &result);
+        result
+    }
+
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        let span = trace::request("tasks/cancel", &request.task_id, &context);
+        let result = self
+            .kit
+            .cancel(bearer(&context), &request.task_id)
+            .instrument(span.clone())
+            .await
+            .map(drop)
+            .or_else(refusal);
+        trace::outcome(&span, &result);
+        result
+    }
+}
+
+impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<M, I, E, T, S> {
+    async fn call(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
         let bearer = bearer(&context);
         let arguments = request.arguments.unwrap_or_default();
         let long = self.kit.tool(&request.name).is_some_and(|tool| tool.long);
@@ -160,35 +209,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
             Err(error) => refusal(error),
         }
     }
-
-    async fn get_task(
-        &self,
-        request: GetTaskParams,
-        context: RequestContext<RoleServer>,
-    ) -> Result<GetTaskResult, ErrorData> {
-        let task = self
-            .kit
-            .task(bearer(&context), &request.task_id)
-            .await
-            .or_else(refusal)?;
-        Ok(GetTaskResult::new(detailed(task)))
-    }
-
-    async fn cancel_task(
-        &self,
-        request: CancelTaskParams,
-        context: RequestContext<RoleServer>,
-    ) -> Result<(), ErrorData> {
-        self.kit
-            .cancel(bearer(&context), &request.task_id)
-            .await
-            .or_else(refusal)?;
-        Ok(())
-    }
 }
 
 /// A call the model should read and act on: not entitled, or failed.
 fn tool_error(error: CallError) -> CallToolResult {
+    trace::tool_error();
     CallToolResult::error(vec![ContentBlock::text(error.to_string())])
 }
 
