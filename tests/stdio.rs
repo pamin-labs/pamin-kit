@@ -29,6 +29,14 @@ async fn a_client_lists_and_calls_tools_over_stdio() {
     let server = info.server_info.as_ref().unwrap();
     assert_eq!(server.title.as_deref(), Some("Echo"));
     assert_eq!(
+        server.description.as_deref(),
+        Some("Says back what it is given.")
+    );
+    assert_eq!(
+        server.website_url.as_deref(),
+        Some("https://example.com/echo")
+    );
+    assert_eq!(
         server.icons.as_ref().unwrap()[0].src,
         "https://example.com/echo.svg"
     );

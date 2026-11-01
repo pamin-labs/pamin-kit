@@ -206,10 +206,13 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
                 .build()
                 .extensions;
         }
-        let implementation = shown!(
+        let looks = self.kit.looks();
+        let mut implementation = shown!(
             Implementation::new(manifest.name, manifest.contract_version),
-            self.kit.looks()
+            looks
         );
+        implementation.description = looks.about.map(str::to_owned);
+        implementation.website_url = looks.website.map(str::to_owned);
         let info = ServerConfig::new(capabilities).with_server_info(implementation);
         match self.kit.instructions() {
             Some(text) => info.with_instructions(text),

@@ -271,6 +271,8 @@ impl Module for Echo {
                 mime: Some("image/svg+xml"),
                 sizes: &["any"],
             }],
+            about: Some("Says back what it is given."),
+            website: Some("https://example.com/echo"),
             ..Looks::default()
         })
         .instructions("Use echo_say to hear text back; echo_wait for a slow reply.");

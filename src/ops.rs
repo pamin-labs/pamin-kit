@@ -341,6 +341,11 @@ pub struct Looks {
     pub audience: &'static [Role],
     /// How much a resource matters, from 0 (least) to 1 (most).
     pub priority: Option<f32>,
+    /// What the server is, for people: the server only, since tools,
+    /// prompts and resources take theirs from doc comments.
+    pub about: Option<&'static str>,
+    /// The server's home page: the server only.
+    pub website: Option<&'static str>,
 }
 
 /// An icon, by URL or `data:` URI.
