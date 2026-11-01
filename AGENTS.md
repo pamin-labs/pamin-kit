@@ -25,7 +25,7 @@ This repository holds `pamin-kit`, the open-source framework every Pamin module 
 The bar is high performance, low resource use, fast builds, and clean, DRY, decoupled code that is easy to maintain and extend. The `pamin-engineering` skill says how to meet it; follow it for every change.
 
 - One implementation per concern: search for an existing one before adding logic, and extend it through its interface.
-- Do not reinvent what exists: the standard library, then the platform, then a maintained, widely used dependency pinned to an exact version.
+- Do not reinvent what exists: the standard library, then the platform, then a maintained, widely used dependency. This crate is a library: require dependencies with caret minimums and let lock files pin exact versions; pin exactly only with a stated reason, as for `rmcp` (InternalDocs `pamin-platform/decisions/2026-11-01-library-dependency-requirements.md`).
 - No speculative abstractions, options or layers; add them when a second real use appears.
 - Measure before and after any change that claims a speed-up or a smaller footprint, and put the numbers in the PR.
 - The kit is the only crate in the system that names `rmcp`; an MCP specification or SDK change happens here once.
