@@ -15,14 +15,18 @@ use rmcp::model::{
     Resource, ResourceContents, ResourceTemplate, ServerCapabilities, ServerConfig, Task,
     TaskPayload, TaskStatus, ToolAnnotations,
 };
-use rmcp::model::{ProgressNotificationParam, ProgressToken};
+use rmcp::model::{
+    CompleteRequestParams, CompleteResult, CompletionInfo, GetPromptRequestParams,
+    GetPromptResponse, GetPromptResult, ListPromptsResult, ProgressNotificationParam,
+    ProgressToken, PromptMessage,
+};
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::Value;
 use tracing::Instrument;
 
 use crate::kit::{CallError, Caller, Kit};
 use crate::module::Module;
-use crate::ops::{APP_MIME, Body, Hints, Progress};
+use crate::ops::{APP_MIME, Body, Hints, Progress, Role};
 use crate::seams::{Entitlements, Identity, Metering};
 use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
 use crate::trace;
@@ -111,6 +115,12 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         if !self.kit.apps().is_empty() || self.kit.resources().next().is_some() {
             capabilities.resources = Some(Default::default());
         }
+        if self.kit.prompts().next().is_some() {
+            capabilities.prompts = Some(Default::default());
+        }
+        if self.kit.has_completions() {
+            capabilities.completions = Some(JsonObject::new());
+        }
         if self.kit.tools().any(|tool| tool.long) {
             capabilities.extensions = ServerCapabilities::builder()
                 .enable_tasks()
@@ -196,6 +206,89 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         result
     }
 
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        let prompts = self.kit.prompts().map(|prompt| {
+            let arguments = prompt
+                .arguments
+                .iter()
+                .map(|argument| {
+                    let listed = rmcp::model::PromptArgument::new(&argument.name)
+                        .with_required(argument.required);
+                    match &argument.description {
+                        Some(text) => listed.with_description(text),
+                        None => listed,
+                    }
+                })
+                .collect();
+            rmcp::model::Prompt::new(prompt.name, prompt.description.as_deref(), Some(arguments))
+        });
+        Ok(ListPromptsResult::with_all_items(prompts.collect()))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, ErrorData> {
+        let span = trace::request("prompts/get", &request.name, &context);
+        let arguments = request.arguments.unwrap_or_default();
+        let result = self
+            .kit
+            .prompt_as(&request.name, caller(&context), arguments)
+            .instrument(span.clone())
+            .await
+            .map(|messages| {
+                let messages = messages
+                    .into_iter()
+                    .map(|message| {
+                        let role = match message.role {
+                            Role::User => rmcp::model::Role::User,
+                            Role::Assistant => rmcp::model::Role::Assistant,
+                        };
+                        PromptMessage::new_text(role, message.text)
+                    })
+                    .collect();
+                GetPromptResult::new(messages).into()
+            })
+            .or_else(refusal);
+        trace::outcome(&span, &result);
+        result
+    }
+
+    async fn complete(
+        &self,
+        request: CompleteRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CompleteResult, ErrorData> {
+        let reference = &request.r#ref;
+        // A kind of reference newer than this kit has nothing to complete.
+        let Some(target) = reference
+            .as_prompt_name()
+            .or_else(|| reference.as_resource_uri())
+        else {
+            return Ok(completion(Vec::new()));
+        };
+        let span = trace::request("completion/complete", target, &context);
+        let result = self
+            .kit
+            .complete_as(
+                target,
+                &request.argument.name,
+                request.argument.value.clone(),
+                caller(&context),
+            )
+            .instrument(span.clone())
+            .await
+            .map(completion)
+            .or_else(refusal);
+        trace::outcome(&span, &result);
+        result
+    }
+
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
@@ -271,6 +364,19 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<
             Err(error) => refusal(error),
         }
     }
+}
+
+/// Suggestions as MCP completion, cut to the most MCP allows with the rest
+/// counted.
+fn completion(mut values: Vec<String>) -> CompleteResult {
+    let total = values.len();
+    values.truncate(CompletionInfo::MAX_VALUES);
+    let mut info = CompletionInfo::new(values).expect("cut to the maximum");
+    if total > CompletionInfo::MAX_VALUES {
+        info.total = u32::try_from(total).ok();
+        info.has_more = Some(true);
+    }
+    CompleteResult::new(info)
 }
 
 /// A resource's body as MCP resource contents.

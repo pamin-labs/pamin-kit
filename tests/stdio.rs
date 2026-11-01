@@ -158,3 +158,36 @@ async fn resources_and_templates_are_listed_and_read() {
     assert!(missing.is_err());
     client.cancel().await.unwrap();
 }
+
+#[tokio::test]
+async fn prompts_are_listed_filled_and_completed() {
+    let transport = TokioChildProcess::new(tokio::process::Command::new(example())).unwrap();
+    let client = ().serve(transport).await.unwrap();
+
+    let prompts = client.list_all_prompts().await.unwrap();
+    assert_eq!(prompts[0].name, "echo_greet");
+    let argument = &prompts[0].arguments.as_ref().unwrap()[0];
+    assert_eq!(argument.name, "name");
+    assert_eq!(argument.required, Some(true));
+
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("name".into(), json!("Ada"));
+    let filled = client
+        .get_prompt(
+            rmcp::model::GetPromptRequestParams::new("echo_greet").with_arguments(arguments),
+        )
+        .await
+        .unwrap();
+    let text = serde_json::to_value(&filled.messages[0]).unwrap();
+    assert_eq!(text["content"]["text"], "Say hello to Ada with echo_say.");
+
+    let completed = client
+        .complete(rmcp::model::CompleteRequestParams::new(
+            rmcp::model::Reference::for_prompt("echo_greet"),
+            rmcp::model::ArgumentInfo::new("name", "A"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(completed.completion.values, ["Ada", "Alan"]);
+    client.cancel().await.unwrap();
+}

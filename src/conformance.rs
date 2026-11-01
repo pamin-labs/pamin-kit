@@ -86,6 +86,26 @@ pub fn check<M: Module>(module: M, skill: &Path) -> Value {
             }
         }
     }
+    for prompt in kit.prompts() {
+        let name = prompt.name;
+        for field in tenancy(&prompt.schema) {
+            failures.push(format!(
+                "{name}: argument {field:?} names a tenant, user or project; \
+                 read the space from the context instead"
+            ));
+        }
+        for argument in strings_only(&prompt.schema) {
+            failures.push(format!(
+                "{name}: argument {argument:?} is not a string, and MCP passes prompt arguments as strings"
+            ));
+        }
+        match now(kit.prompt(name, None, JsonObject::new())) {
+            Err(CallError::Unidentified) => {}
+            other => failures.push(format!(
+                "{name}: a prompt without an identity returned {other:?} instead of a refusal"
+            )),
+        }
+    }
     // A long operation registered as a tool would hold the connection open
     // and be lost on a reconnect; one registered as a task survives it.
     let tasks = kit.tools().any(|tool| tool.long);
@@ -127,7 +147,18 @@ pub fn check<M: Module>(module: M, skill: &Path) -> Value {
             })
         })
         .collect();
-    json!({"tools": tools, "resources": resources})
+    let prompts: Vec<Value> = kit
+        .prompts()
+        .map(|prompt| {
+            json!({
+                "name": prompt.name,
+                "feature": feature(prompt.feature),
+                "description": prompt.description,
+                "arguments": prompt.arguments,
+            })
+        })
+        .collect();
+    json!({"tools": tools, "resources": resources, "prompts": prompts})
 }
 
 fn feature(feature: Feature) -> &'static str {
@@ -135,6 +166,24 @@ fn feature(feature: Feature) -> &'static str {
         Feature::Core => "core",
         Feature::Pro(feature) => feature,
     }
+}
+
+/// The arguments of a prompt's schema that are not strings (or optional
+/// strings).
+fn strings_only(schema: &JsonObject) -> Vec<String> {
+    let Some(Value::Object(properties)) = schema.get("properties") else {
+        return Vec::new();
+    };
+    let string = |kind: &Value| match kind {
+        Value::String(kind) => kind == "string",
+        Value::Array(kinds) => kinds.iter().all(|k| k == "string" || k == "null"),
+        _ => false,
+    };
+    properties
+        .iter()
+        .filter(|(_, property)| !property.get("type").is_some_and(string))
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
 /// The `{name}` variables of a resource URI template.

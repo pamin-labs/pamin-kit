@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use pamin_kit::schemars::JsonSchema;
 use pamin_kit::{
-    Audience, Body, Ctx, Feature, Hardware, Hints, Kit, Local, Manifest, Module, Ops, Routing,
-    Space,
+    Audience, Body, Ctx, Feature, Hardware, Hints, Kit, Local, Manifest, Message, Module, Ops,
+    Role, Routing, Space,
 };
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +32,13 @@ pub struct Said {
 pub struct SayUri {
     /// What to say.
     text: String,
+}
+
+/// Starts a conversation about something to say.
+#[derive(Deserialize, JsonSchema)]
+pub struct Greet {
+    /// Who to greet.
+    name: String,
 }
 
 /// Waits, then says the text back.
@@ -132,6 +139,30 @@ impl Module for Echo {
                     mime: "application/json",
                     text,
                 })
+            },
+        )
+        .prompt(
+            "echo_greet",
+            Feature::Core,
+            |_: Arc<Self>, _: Ctx, greet: Greet| async move {
+                Ok::<_, String>(vec![Message {
+                    role: Role::User,
+                    text: format!("Say hello to {} with echo_say.", greet.name),
+                }])
+            },
+        )
+        .complete(
+            "echo_greet",
+            "name",
+            |_: Arc<Self>, _: Ctx, typed: String| async move {
+                let names = ["Ada", "Alan", "Grace"];
+                Ok::<_, String>(
+                    names
+                        .iter()
+                        .filter(|name| name.starts_with(&typed))
+                        .map(|name| name.to_string())
+                        .collect(),
+                )
             },
         )
         .instructions("Use echo_say to hear text back; echo_wait for a slow reply.");
