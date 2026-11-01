@@ -146,3 +146,7 @@ It fails the test when a schema is not valid JSON Schema 2020-12, an argument or
 ## Performance
 
 The kit's own work per call (identity, entitlement, metering, dispatch) is measured by `cargo bench --bench call` (single caller, budget 50 µs p95; well under 1 µs measured) and `cargo bench --bench concurrent` (256 concurrent callers, no shared lock on the call path). A call that asks, attaches or changes nothing allocates no per-call state for those.
+
+## Releasing
+
+Bump `version` in `Cargo.toml` in a pull request and merge it, then run the `Release` workflow on `main` (`gh workflow run release.yml`). It publishes that version to crates.io through trusted publishing and tags it `v<version>`.
