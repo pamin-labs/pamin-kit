@@ -71,3 +71,21 @@ async fn a_task_survives_a_reconnect_and_stays_its_callers() {
     let (_, polled) = rpc(address, "ada", true, "tasks/get", get).await;
     assert_eq!(polled["result"]["status"], "cancelled", "{polled}");
 }
+
+#[tokio::test]
+async fn an_operation_asks_a_new_client_through_mrtr() {
+    let address = serve().await;
+    let confirm = call("echo_confirm", json!({"text": "hi"}));
+    // A 2026-07-28 client gets the question back and calls again with the
+    // answer; nothing waits on the server between the two requests.
+    let (_, asked) = rpc(address, "ada", false, "tools/call", confirm.clone()).await;
+    assert_eq!(asked["result"]["resultType"], "input_required", "{asked}");
+    let question = &asked["result"]["inputRequests"]["sure"];
+    assert_eq!(question["method"], "elicitation/create", "{asked}");
+    assert_eq!(question["params"]["message"], "Say \"hi\"?");
+
+    let mut answered = confirm;
+    answered["inputResponses"] = json!({"sure": {"action": "accept", "content": {"yes": true}}});
+    let (_, said) = rpc(address, "ada", false, "tools/call", answered).await;
+    assert_eq!(said["result"]["structuredContent"]["text"], "hi", "{said}");
+}

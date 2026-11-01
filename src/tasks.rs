@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::ops::Ask;
 use crate::seams::Space;
 
 /// How long a store keeps a task after its last update, at least. Callers are
@@ -27,6 +28,10 @@ pub struct StoredTask {
     /// Whose task it is: only the same space may read or cancel it.
     pub space: Space,
     pub operation: String,
+    /// The operation's arguments, to run it again with the user's answers
+    /// when it asked for input.
+    #[serde(default)]
+    pub arguments: Value,
     pub state: TaskState,
     /// What the operation last reported while working.
     #[serde(default)]
@@ -44,6 +49,8 @@ pub struct StoredTask {
 #[serde(rename_all = "snake_case")]
 pub enum TaskState {
     Working,
+    /// Waiting for the user's answers to these questions (`tasks/update`).
+    InputRequired(Vec<Ask>),
     /// The operation's result.
     Succeeded(Value),
     /// The operation's error message, which the model reads.
@@ -53,7 +60,10 @@ pub enum TaskState {
 
 impl TaskState {
     pub fn is_terminal(&self) -> bool {
-        !matches!(self, Self::Working)
+        matches!(
+            self,
+            Self::Succeeded(_) | Self::Errored(_) | Self::Cancelled
+        )
     }
 }
 
@@ -145,6 +155,7 @@ mod tests {
                 project: "p".into(),
             },
             operation: "op".into(),
+            arguments: Value::Null,
             state: TaskState::Working,
             status: None,
             created_at: SystemTime::now(),

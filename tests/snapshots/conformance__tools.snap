@@ -113,6 +113,43 @@ expression: tools
       "ui": null
     },
     {
+      "description": "Asks the user before saying the text back.",
+      "feature": "core",
+      "hints": null,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "text": {
+            "description": "What to say, once the user agrees.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "echo_confirm",
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "project"
+        ],
+        "type": "object"
+      },
+      "task": false,
+      "ui": null
+    },
+    {
       "description": "Waits, then says the text back.",
       "feature": "core",
       "hints": null,

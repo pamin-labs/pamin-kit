@@ -34,6 +34,20 @@ pub struct SayUri {
     text: String,
 }
 
+/// Asks the user before saying the text back.
+#[derive(Deserialize, JsonSchema)]
+pub struct Confirm {
+    /// What to say, once the user agrees.
+    text: String,
+}
+
+/// The user's answer to whether to say it.
+#[derive(Deserialize, JsonSchema)]
+pub struct Sure {
+    /// Say it?
+    yes: bool,
+}
+
 /// Starts a conversation about something to say.
 #[derive(Deserialize, JsonSchema)]
 pub struct Greet {
@@ -59,6 +73,15 @@ impl Echo {
             text: say.text,
             project: space.project.clone(),
         })
+    }
+
+    /// Says the text back only once the user agrees.
+    async fn confirm(&self, ctx: &Ctx, confirm: Confirm) -> Result<Said, String> {
+        let question = format!("Say {:?}?", confirm.text);
+        match ctx.ask::<Sure>("sure", &question)? {
+            Some(Sure { yes: true }) => self.say(ctx.space(), Say { text: confirm.text }).await,
+            _ => Err("the user did not want it said".into()),
+        }
     }
 
     /// Waits in ten steps, reporting each, and stops early when cancelled.
@@ -100,6 +123,11 @@ impl Module for Echo {
             "echo_shout",
             Feature::Pro("shout"),
             |m: Arc<Self>, ctx: Ctx, a: Say| async move { m.say(ctx.space(), a).await },
+        )
+        .tool(
+            "echo_confirm",
+            Feature::Core,
+            |m: Arc<Self>, ctx: Ctx, a: Confirm| async move { m.confirm(&ctx, a).await },
         )
         .task(
             "echo_wait",

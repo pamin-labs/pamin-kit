@@ -140,3 +140,69 @@ async fn the_first_of_finishing_and_cancelling_wins() {
         }
     }
 }
+
+/// Asks once, then says what it was told.
+struct Asking;
+
+/// The user's word.
+#[derive(serde::Deserialize, pamin_kit::schemars::JsonSchema)]
+struct Word {
+    /// A word.
+    word: String,
+}
+
+/// Nothing to give.
+#[derive(serde::Deserialize, pamin_kit::schemars::JsonSchema)]
+struct Nothing {}
+
+impl pamin_kit::Module for Asking {
+    fn manifest(&self) -> pamin_kit::Manifest {
+        pamin_kit::Manifest {
+            long_running: true,
+            ..Echo.manifest()
+        }
+    }
+
+    fn register(&self, ops: &mut pamin_kit::Ops<Self>) {
+        ops.task(
+            "asking_word",
+            Feature::Core,
+            |_: Arc<Self>, ctx: pamin_kit::Ctx, _: Nothing| async move {
+                let word: Option<Word> = ctx.ask("word", "Which word?")?;
+                Ok::<_, String>(word.map(|w| w.word))
+            },
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_task_waits_for_the_users_answer_and_goes_on() {
+    let kit = Arc::new(Kit::new(Asking, Local::new("notes")));
+    let task = kit
+        .start("asking_word", None, args(json!({})))
+        .await
+        .unwrap();
+    let asked = loop {
+        let now = kit.task(None, &task.id).await.unwrap();
+        if now.state != pamin_kit::TaskState::Working {
+            break now;
+        }
+        tokio::task::yield_now().await;
+    };
+    let pamin_kit::TaskState::InputRequired(questions) = &asked.state else {
+        panic!("{:?}", asked.state);
+    };
+    assert_eq!(questions[0].key, "word");
+
+    let answer = json!({"action": "accept", "content": {"word": "hello"}});
+    let answers = [("word".to_owned(), answer)].into_iter().collect();
+    kit.update(None, &task.id, answers).await.unwrap();
+    let done = loop {
+        let now = kit.task(None, &task.id).await.unwrap();
+        if now.state.is_terminal() {
+            break now;
+        }
+        tokio::task::yield_now().await;
+    };
+    assert_eq!(done.state, pamin_kit::TaskState::Succeeded(json!("hello")));
+}

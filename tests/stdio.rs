@@ -26,7 +26,10 @@ async fn a_client_lists_and_calls_tools_over_stdio() {
 
     let tools = client.list_all_tools().await.unwrap();
     let names: Vec<_> = tools.iter().map(|tool| tool.name.as_ref()).collect();
-    assert_eq!(names, ["echo_say", "echo_shout", "echo_wait"]);
+    assert_eq!(
+        names,
+        ["echo_say", "echo_shout", "echo_confirm", "echo_wait"]
+    );
     assert!(tools[0].output_schema.is_some());
     assert_eq!(tools[0].title.as_deref(), Some("Say"));
     let hints = tools[0].annotations.as_ref().unwrap();
@@ -190,4 +193,46 @@ async fn prompts_are_listed_filled_and_completed() {
         .unwrap();
     assert_eq!(completed.completion.values, ["Ada", "Alan"]);
     client.cancel().await.unwrap();
+}
+
+/// A client whose user answers every question with `yes` or `no`.
+#[derive(Clone)]
+struct Answering(bool);
+
+impl rmcp::ClientHandler for Answering {
+    fn get_info(&self) -> rmcp::model::ClientConfig {
+        let mut info = rmcp::model::ClientConfig::default();
+        info.capabilities = rmcp::model::ClientCapabilities::builder()
+            .enable_elicitation()
+            .build();
+        info
+    }
+
+    async fn create_elicitation(
+        &self,
+        _request: rmcp::model::ElicitRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleClient>,
+    ) -> Result<rmcp::model::ElicitResult, rmcp::ErrorData> {
+        let mut answer = rmcp::model::ElicitResult::new(rmcp::model::ElicitationAction::Accept);
+        answer.content = Some(json!({"yes": self.0}));
+        Ok(answer)
+    }
+}
+
+#[tokio::test]
+async fn an_operation_asks_the_user_and_runs_again_with_the_answer() {
+    for (yes, said) in [(true, false), (false, true)] {
+        let transport = TokioChildProcess::new(tokio::process::Command::new(example())).unwrap();
+        let client = Answering(yes).serve(transport).await.unwrap();
+        // The client answers the question and calls again, as MRTR has it.
+        let result = client
+            .call_tool(
+                CallToolRequestParams::new("echo_confirm")
+                    .with_arguments(json!({"text": "hi"}).as_object().unwrap().clone()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(said), "{result:?}");
+        client.cancel().await.unwrap();
+    }
 }
