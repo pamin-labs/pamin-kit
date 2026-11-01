@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use pamin_kit::schemars::JsonSchema;
 use pamin_kit::{
-    Audience, Body, Ctx, Feature, Hardware, Hints, Kit, Local, Manifest, Message, Module, Ops,
-    Role, Routing, Space,
+    Audience, Body, Content, Ctx, Feature, Hardware, Hints, Kit, Local, Manifest, Message, Module,
+    Ops, Role, Routing, Space,
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +33,19 @@ pub struct SayUri {
     /// What to say.
     text: String,
 }
+
+/// Draws a dot: one black pixel, as a PNG image.
+#[derive(Deserialize, JsonSchema)]
+pub struct Dot {}
+
+/// A 1x1 black PNG.
+const DOT: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x00, 0x00, 0x00, 0x00, 0x3a, 0x7e, 0x9b,
+    0x55, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x60, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x01, 0x48, 0xaf, 0xa4, 0x71, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+    0x42, 0x60, 0x82,
+];
 
 /// Asks the user before saying the text back.
 #[derive(Deserialize, JsonSchema)]
@@ -119,8 +132,15 @@ impl Module for Echo {
             Feature::Core,
             |m: Arc<Self>, ctx: Ctx, a: Say| async move {
                 let said = m.say(ctx.space(), a).await?;
-                // What reading echo://say/{text} gives has just been said.
-                ctx.updated(format!("echo://say/{}", said.text));
+                // What reading echo://say/{text} gives has just been said, and
+                // the result links to it.
+                let uri = format!("echo://say/{}", said.text);
+                ctx.updated(uri.clone());
+                ctx.attach(Content::Link {
+                    uri,
+                    name: "Said".into(),
+                    mime: Some("application/json".into()),
+                });
                 Ok::<_, String>(said)
             },
         )
@@ -128,6 +148,17 @@ impl Module for Echo {
             "echo_shout",
             Feature::Pro("shout"),
             |m: Arc<Self>, ctx: Ctx, a: Say| async move { m.say(ctx.space(), a).await },
+        )
+        .tool(
+            "echo_dot",
+            Feature::Core,
+            |_: Arc<Self>, ctx: Ctx, _: Dot| async move {
+                ctx.attach(Content::Image {
+                    mime: "image/png".into(),
+                    data: DOT.to_vec(),
+                });
+                Ok::<_, String>(())
+            },
         )
         .tool(
             "echo_confirm",
@@ -155,10 +186,7 @@ impl Module for Echo {
             "About echo",
             Feature::Core,
             |_: Arc<Self>, _: Ctx, (): ()| async {
-                Ok::<_, String>(Body::Text {
-                    mime: "text/plain",
-                    text: "Echo says text back.".into(),
-                })
+                Ok::<_, String>(Body::text("text/plain", "Echo says text back."))
             },
         )
         .resource(
@@ -167,21 +195,17 @@ impl Module for Echo {
             Feature::Core,
             |m: Arc<Self>, ctx: Ctx, uri: SayUri| async move {
                 let said = m.say(ctx.space(), Say { text: uri.text }).await?;
-                let text = serde_json::to_string(&said).map_err(|error| error.to_string())?;
-                Ok::<_, String>(Body::Text {
-                    mime: "application/json",
-                    text,
-                })
+                Body::json(&said)
             },
         )
         .prompt(
             "echo_greet",
             Feature::Core,
             |_: Arc<Self>, _: Ctx, greet: Greet| async move {
-                Ok::<_, String>(vec![Message {
-                    role: Role::User,
-                    text: format!("Say hello to {} with echo_say.", greet.name),
-                }])
+                Ok::<_, String>(vec![Message::text(
+                    Role::User,
+                    format!("Say hello to {} with echo_say.", greet.name),
+                )])
             },
         )
         .complete(

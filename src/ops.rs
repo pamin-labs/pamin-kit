@@ -5,6 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
@@ -77,6 +78,8 @@ pub(crate) struct Effects {
     pub asked: Vec<Ask>,
     /// The resources it changed, by URI.
     pub updated: Vec<String>,
+    /// Content it returns beside its result.
+    pub attached: Vec<Content>,
 }
 
 tokio::task_local! {
@@ -194,6 +197,14 @@ impl Ctx {
         });
         // Outside a kit call there is nobody to ask.
         answer.unwrap_or(Err(NeedsInput))
+    }
+
+    /// Returns `content` beside a tool's structured result: an image, audio,
+    /// text, or a resource by link or carried along, in the order attached.
+    /// Resource reads and prompts return their own content instead.
+    pub fn attach(&self, content: Content) {
+        // Outside a kit call there is nobody to return it to.
+        let _ = INPUT.try_with(|input| input.borrow_mut().effects.attached.push(content));
     }
 
     /// Says the resource at `uri` changed, so clients listening for it in
@@ -317,10 +328,86 @@ impl Resource {
 }
 
 /// What reading a resource returns.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Body {
-    Text { mime: &'static str, text: String },
-    Bytes { mime: &'static str, bytes: Vec<u8> },
+    Text {
+        mime: Cow<'static, str>,
+        text: String,
+    },
+    Bytes {
+        mime: Cow<'static, str>,
+        #[serde(with = "base64_bytes")]
+        bytes: Vec<u8>,
+    },
+}
+
+impl Body {
+    pub fn text(mime: impl Into<Cow<'static, str>>, text: impl Into<String>) -> Self {
+        Self::Text {
+            mime: mime.into(),
+            text: text.into(),
+        }
+    }
+
+    pub fn bytes(mime: impl Into<Cow<'static, str>>, bytes: impl Into<Vec<u8>>) -> Self {
+        Self::Bytes {
+            mime: mime.into(),
+            bytes: bytes.into(),
+        }
+    }
+
+    /// `value` as JSON, the usual body of a module's resource.
+    pub fn json<T: Serialize>(value: &T) -> Result<Self, String> {
+        let text = serde_json::to_string(value).map_err(|error| error.to_string())?;
+        Ok(Self::text("application/json", text))
+    }
+}
+
+/// Content beside a tool's structured result, or a prompt message: what
+/// MCP calls content blocks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Content {
+    Text(String),
+    Image {
+        mime: Cow<'static, str>,
+        #[serde(with = "base64_bytes")]
+        data: Vec<u8>,
+    },
+    Audio {
+        mime: Cow<'static, str>,
+        #[serde(with = "base64_bytes")]
+        data: Vec<u8>,
+    },
+    /// A resource the client may read, by link.
+    Link {
+        uri: String,
+        name: String,
+        mime: Option<Cow<'static, str>>,
+    },
+    /// A resource's body, carried along.
+    Resource {
+        uri: String,
+        body: Body,
+    },
+}
+
+/// Bytes as base64 in stored JSON, where a list of numbers would be four
+/// times larger.
+mod base64_bytes {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        STANDARD.decode(text).map_err(serde::de::Error::custom)
+    }
 }
 
 /// One registered resource.
@@ -362,7 +449,17 @@ pub enum Role {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message {
     pub role: Role,
-    pub text: String,
+    pub content: Content,
+}
+
+impl Message {
+    /// A message of text alone, the usual kind.
+    pub fn text(role: Role, text: impl Into<String>) -> Self {
+        Self {
+            role,
+            content: Content::Text(text.into()),
+        }
+    }
 }
 
 /// One registered prompt.

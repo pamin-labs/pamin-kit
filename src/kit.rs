@@ -7,14 +7,15 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::module::{Manifest, Module};
 use crate::ops::{
-    APP_MIME, App, Ask, Body, Ctx, JsonObject, Message, Ops, Progress, Prompt, Resource, Tool,
-    with_input,
+    APP_MIME, App, Ask, Body, Content, Ctx, JsonObject, Message, Ops, Progress, Prompt, Resource,
+    Tool, with_input,
 };
 use crate::seams::{
     Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage,
@@ -167,7 +168,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         // data it shows arrives through identified tool calls.
         if let Some(app) = self.apps().iter().find(|app| app.uri == uri) {
             return Ok(Body::Text {
-                mime: APP_MIME,
+                mime: APP_MIME.into(),
                 text: app.html.to_owned(),
             });
         }
@@ -202,6 +203,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             (readable.read)(self.core.module.clone(), ctx, variables)
         })
         .await
+        .map(|(value, _)| value)
         .map_err(CallError::from)
     }
 
@@ -248,6 +250,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             (promptable.get)(self.core.module.clone(), ctx, Value::Object(arguments))
         })
         .await
+        .map(|(value, _)| value)
         .map_err(CallError::from)
     }
 
@@ -287,6 +290,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             (completer.complete)(self.core.module.clone(), ctx, Value::String(typed))
         })
         .await
+        .map(|(value, _)| value)
         .map_err(CallError::from)
     }
 
@@ -302,7 +306,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         name: &str,
         bearer: Option<&str>,
         arguments: JsonObject,
-    ) -> Result<Value, CallError> {
+    ) -> Result<Reply, CallError> {
         let caller = Caller::holding(bearer);
         self.call_as(name, caller, arguments).await
     }
@@ -313,7 +317,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         name: &str,
         caller: Caller<'_>,
         arguments: JsonObject,
-    ) -> Result<Value, CallError> {
+    ) -> Result<Reply, CallError> {
         let (index, space) = self.admit(name, &caller).await?;
         let ctx = Ctx::new(space, caller.cancel, caller.progress);
         self.run(index, ctx, Value::Object(arguments), caller.answers)
@@ -574,12 +578,14 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         ctx: Ctx,
         arguments: Value,
         answers: Option<BTreeMap<String, Value>>,
-    ) -> Result<Value, Halt> {
+    ) -> Result<Reply, Halt> {
         let op = &self.core.ops.list[index];
-        self.metered(op.tool.name, op.tool.feature, ctx, answers, |ctx| {
-            (op.call)(self.core.module.clone(), ctx, arguments)
-        })
-        .await
+        let (value, content) = self
+            .metered(op.tool.name, op.tool.feature, ctx, answers, |ctx| {
+                (op.call)(self.core.module.clone(), ctx, arguments)
+            })
+            .await?;
+        Ok(Reply { value, content })
     }
 
     /// Runs `work` and records its usage as `operation`: one place for
@@ -591,7 +597,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         ctx: Ctx,
         answers: Option<BTreeMap<String, Value>>,
         work: impl FnOnce(Ctx) -> Fut,
-    ) -> Result<V, Halt>
+    ) -> Result<(V, Vec<Content>), Halt>
     where
         Fut: Future<Output = Result<V, String>>,
     {
@@ -607,7 +613,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             });
         }
         let result = match result {
-            Ok(value) => Ok(value),
+            Ok(value) => Ok((value, effects.attached)),
             // It stopped to ask the user: not a failure, a question.
             Err(_) if !effects.asked.is_empty() => Err(Halt::Input(effects.asked)),
             Err(message) => Err(Halt::Failed(message)),
@@ -666,6 +672,13 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             }
         }
     }
+}
+
+/// What a tool returned: its structured result and any content beside it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Reply {
+    pub value: Value,
+    pub content: Vec<Content>,
 }
 
 /// How many changes a slow listener may fall behind before it skips some.

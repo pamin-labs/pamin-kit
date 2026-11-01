@@ -28,7 +28,13 @@ async fn a_client_lists_and_calls_tools_over_stdio() {
     let names: Vec<_> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     assert_eq!(
         names,
-        ["echo_say", "echo_shout", "echo_confirm", "echo_wait"]
+        [
+            "echo_say",
+            "echo_shout",
+            "echo_dot",
+            "echo_confirm",
+            "echo_wait"
+        ]
     );
     assert!(tools[0].output_schema.is_some());
     assert_eq!(tools[0].title.as_deref(), Some("Say"));
@@ -271,5 +277,36 @@ async fn a_listener_hears_only_the_resources_it_asked_for() {
     // rmcp drains a closed stdio connection's open requests for up to five
     // seconds before it stops a listener, so closing takes that long.
     drop(listening);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_tool_returns_an_image_and_a_link_beside_its_result() {
+    let transport = TokioChildProcess::new(tokio::process::Command::new(example())).unwrap();
+    let client = ().serve(transport).await.unwrap();
+    let call = |name: &'static str, arguments: serde_json::Value| {
+        CallToolRequestParams::new(name).with_arguments(arguments.as_object().unwrap().clone())
+    };
+
+    let said = client
+        .call_tool(call("echo_say", json!({"text": "hi"})))
+        .await
+        .unwrap();
+    let blocks = serde_json::to_value(&said.content).unwrap();
+    // First the result as text, for clients that read only content; then
+    // the link the operation attached.
+    assert_eq!(blocks[1]["type"], "resource_link", "{blocks}");
+    assert_eq!(blocks[1]["uri"], "echo://say/hi");
+
+    let dot = client.call_tool(call("echo_dot", json!({}))).await.unwrap();
+    let blocks = serde_json::to_value(&dot.content).unwrap();
+    assert_eq!(blocks[1]["type"], "image", "{blocks}");
+    assert_eq!(blocks[1]["mimeType"], "image/png");
+    assert!(
+        blocks[1]["data"]
+            .as_str()
+            .unwrap()
+            .starts_with("iVBORw0KGgo")
+    );
     client.cancel().await.unwrap();
 }
