@@ -34,7 +34,7 @@ use tracing::Instrument;
 use crate::kit::Reply;
 use crate::kit::{CallError, Caller, Kit};
 use crate::module::Module;
-use crate::ops::{APP_MIME, Ask, Body, Content, Hints, Progress, Role};
+use crate::ops::{APP_MIME, Ask, Body, Content, Form, Hints, Progress, Role};
 use crate::seams::{Entitlements, Identity, Metering, Space};
 use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
 use crate::trace;
@@ -485,17 +485,38 @@ fn questions(asked: Vec<Ask>) -> Result<InputRequiredResult, ErrorData> {
 /// One question as an elicitation form, with the key its answer comes back
 /// under.
 fn form(ask: Ask) -> Result<(String, ElicitRequestParams), ErrorData> {
-    let schema = ElicitationSchema::from_json_schema(ask.schema).map_err(|error| {
-        // The module asked with a type an elicitation form cannot show: a
-        // mistake in the module.
-        ErrorData::internal_error(format!("cannot ask {}: {error}", ask.key), None)
-    })?;
-    let form = ElicitRequestParams::FormElicitationParams {
-        meta: None,
-        message: ask.message,
-        requested_schema: schema,
+    let form = match ask.form {
+        Form::Fields(schema) => {
+            let schema = ElicitationSchema::from_json_schema(schema).map_err(|error| {
+                // The module asked with a type an elicitation form cannot
+                // show: a mistake in the module.
+                ErrorData::internal_error(format!("cannot ask {}: {error}", ask.key), None)
+            })?;
+            ElicitRequestParams::FormElicitationParams {
+                meta: None,
+                message: ask.message,
+                requested_schema: schema,
+            }
+        }
+        Form::Url(url) => ElicitRequestParams::UrlElicitationParams {
+            meta: None,
+            message: ask.message,
+            url,
+            // Unique per question asked, as MCP requires; the key ties the
+            // answer to the question.
+            elicitation_id: uuid::Uuid::new_v4().to_string(),
+        },
     };
     Ok((ask.key, form))
+}
+
+/// Whether the client can answer every question asked: a URL question
+/// only when the client declared URL elicitation.
+fn askable(context: &RequestContext<RoleServer>, asked: &[Ask]) -> bool {
+    let urls = capabilities(context)
+        .and_then(|capabilities| capabilities.elicitation)
+        .is_some_and(|elicitation| elicitation.url.is_some());
+    urls || asked.iter().all(|ask| matches!(ask.form, Form::Fields(_)))
 }
 
 /// Suggestions as MCP completion, cut to the most MCP allows with the rest
@@ -647,6 +668,12 @@ where
     let can_ask = capabilities(context).is_some_and(|c| c.elicitation.is_some());
     for _ in 0..MAX_ROUNDS {
         let asked = match attempt(answers.clone()).await {
+            Err(CallError::InputRequired(asked)) if !askable(context, &asked) => {
+                return Err(CallError::Failed(
+                    "the operation needs the user to open a page, which this client cannot do"
+                        .into(),
+                ));
+            }
             Err(CallError::InputRequired(asked)) if !mrtr && can_ask => asked,
             result => return result,
         };

@@ -47,6 +47,10 @@ const DOT: &[u8] = &[
     0x42, 0x60, 0x82,
 ];
 
+/// Sends the user to echo's web page, and says whether they went.
+#[derive(Deserialize, JsonSchema)]
+pub struct Visit {}
+
 /// Asks the user before saying the text back.
 #[derive(Deserialize, JsonSchema)]
 pub struct Confirm {
@@ -158,6 +162,18 @@ impl Module for Echo {
                     data: DOT.to_vec(),
                 });
                 Ok::<_, String>(())
+            },
+        )
+        .tool(
+            "echo_visit",
+            Feature::Core,
+            |_: Arc<Self>, ctx: Ctx, _: Visit| async move {
+                let went = ctx.ask_url(
+                    "visit",
+                    "Have a look at echo's page.",
+                    "https://example.com/echo",
+                )?;
+                Ok::<_, String>(went)
             },
         )
         .tool(

@@ -126,6 +126,19 @@ expression: tools
       "ui": null
     },
     {
+      "description": "Sends the user to echo's web page, and says whether they went.",
+      "feature": "core",
+      "hints": null,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object"
+      },
+      "name": "echo_visit",
+      "output": null,
+      "task": false,
+      "ui": null
+    },
+    {
       "description": "Asks the user before saying the text back.",
       "feature": "core",
       "hints": null,
