@@ -11,7 +11,5 @@ keywords = ["mcp", "modules", "framework"]
 categories = ["network-programming", "development-tools"]
 exclude = ["/.agents", "/.claude", "/.github", "/.pamin-labs-dev.toml", "/AGENTS.md", "/CLAUDE.md"]
 
-[dependencies]
-
 [profile.dev]
 debug = "line-tables-only"
