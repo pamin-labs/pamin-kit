@@ -6,6 +6,13 @@ expression: tools
   {
     "description": "Says the text back, with the project it was said in.",
     "feature": "core",
+    "hints": {
+      "destructive": true,
+      "idempotent": true,
+      "open_world": false,
+      "read_only": true,
+      "title": "Say"
+    },
     "input": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -42,6 +49,7 @@ expression: tools
   {
     "description": "Says the text back, with the project it was said in.",
     "feature": "shout",
+    "hints": null,
     "input": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -78,6 +86,7 @@ expression: tools
   {
     "description": "Waits, then says the text back.",
     "feature": "core",
+    "hints": null,
     "input": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {

@@ -7,7 +7,7 @@ use std::time::{Instant, SystemTime};
 use serde_json::Value;
 
 use crate::module::{Manifest, Module};
-use crate::ops::{App, Ctx, JsonObject, Op, Ops, Tool};
+use crate::ops::{App, Ctx, JsonObject, Ops, Tool};
 use crate::seams::{
     Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage,
 };
@@ -17,8 +17,8 @@ use crate::tasks::{MemoryTasks, StoredTask, TaskState, TaskStore};
 pub struct Kit<M, I = Local, E = Open, T = Unmetered, S = MemoryTasks> {
     module: Arc<M>,
     manifest: Manifest,
-    ops: Vec<Op<M>>,
-    apps: Vec<App>,
+    /// Everything the module registered.
+    ops: Ops<M>,
     identity: I,
     entitlements: E,
     metering: T,
@@ -33,8 +33,7 @@ impl<M: Module, I: Identity> Kit<M, I> {
         Self {
             manifest: module.manifest(),
             module: Arc::new(module),
-            ops: ops.list,
-            apps: ops.apps,
+            ops,
             identity,
             entitlements: Open,
             metering: Unmetered,
@@ -49,7 +48,6 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             module: self.module,
             manifest: self.manifest,
             ops: self.ops,
-            apps: self.apps,
             identity: self.identity,
             entitlements,
             metering: self.metering,
@@ -62,7 +60,6 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             module: self.module,
             manifest: self.manifest,
             ops: self.ops,
-            apps: self.apps,
             identity: self.identity,
             entitlements: self.entitlements,
             metering,
@@ -75,7 +72,6 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             module: self.module,
             manifest: self.manifest,
             ops: self.ops,
-            apps: self.apps,
             identity: self.identity,
             entitlements: self.entitlements,
             metering: self.metering,
@@ -89,12 +85,17 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
 
     /// Every registered operation, in registration order.
     pub fn tools(&self) -> impl Iterator<Item = &Tool> {
-        self.ops.iter().map(|op| &op.tool)
+        self.ops.list.iter().map(|op| &op.tool)
+    }
+
+    /// The module's guidance for a model, if it gave any.
+    pub fn instructions(&self) -> Option<&'static str> {
+        self.ops.instructions
     }
 
     /// Every registered MCP App page.
     pub fn apps(&self) -> &[App] {
-        &self.apps
+        &self.ops.apps
     }
 
     /// The registered operation `name`.
@@ -129,7 +130,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         let task = StoredTask {
             id: uuid::Uuid::new_v4().to_string(),
             space: Space::clone(&space),
-            operation: self.ops[index].tool.name.to_owned(),
+            operation: self.ops.list[index].tool.name.to_owned(),
             state: TaskState::Working,
             created_at: now,
             updated_at: now,
@@ -195,10 +196,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         // ponytail: linear scan; a module has a handful of operations.
         let index = self
             .ops
+            .list
             .iter()
             .position(|op| op.tool.name == name)
             .ok_or_else(|| CallError::Unknown(name.to_owned()))?;
-        let feature = self.ops[index].tool.feature;
+        let feature = self.ops.list[index].tool.feature;
         if !self.entitlements.allows(&space, feature) {
             return Err(CallError::NotEntitled(feature));
         }
@@ -212,7 +214,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         space: Arc<Space>,
         arguments: JsonObject,
     ) -> Result<Value, String> {
-        let op = &self.ops[index];
+        let op = &self.ops.list[index];
         let started = Instant::now();
         let result = (op.call)(self.module.clone(), Ctx::new(space.clone()), arguments).await;
         self.metering.record(

@@ -11,6 +11,7 @@ use rmcp::model::{
     ListResourcesResult, ListToolsResult, MetaObject, PaginatedRequestParams,
     ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
     ResourceContents, ServerCapabilities, ServerConfig, Task, TaskPayload, TaskStatus,
+    ToolAnnotations,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::Value;
@@ -18,6 +19,7 @@ use tracing::Instrument;
 
 use crate::kit::{CallError, Kit};
 use crate::module::Module;
+use crate::ops::Hints;
 use crate::seams::{Entitlements, Identity, Metering};
 use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
 use crate::trace;
@@ -31,6 +33,23 @@ fn ui(uri: &str) -> JsonObject {
         unreachable!()
     };
     meta
+}
+
+/// A tool with its hints as MCP annotations; the title also names the tool.
+fn annotated(tool: rmcp::model::Tool, hints: Hints) -> rmcp::model::Tool {
+    let title = hints.title.map(str::to_owned);
+    let annotations = ToolAnnotations::from_raw(
+        title.clone(),
+        Some(hints.read_only),
+        Some(hints.destructive),
+        Some(hints.idempotent),
+        Some(hints.open_world),
+    );
+    let tool = tool.annotate(annotations);
+    match title {
+        Some(title) => tool.with_title(title),
+        None => tool,
+    }
 }
 
 /// How often a caller should poll a task, in milliseconds.
@@ -66,8 +85,12 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<
                     Some(output) => listed.with_raw_output_schema(output.clone()),
                     None => listed,
                 };
-                match tool.ui {
+                let listed = match tool.ui {
                     Some(uri) => listed.with_meta(MetaObject(ui(uri))),
+                    None => listed,
+                };
+                match tool.hints {
+                    Some(hints) => annotated(listed, hints),
                     None => listed,
                 }
             })
@@ -94,10 +117,14 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
                 .build()
                 .extensions;
         }
-        ServerConfig::new(capabilities).with_server_info(Implementation::new(
+        let info = ServerConfig::new(capabilities).with_server_info(Implementation::new(
             manifest.name,
             manifest.contract_version,
-        ))
+        ));
+        match self.kit.instructions() {
+            Some(text) => info.with_instructions(text),
+            None => info,
+        }
     }
 
     async fn list_tools(
