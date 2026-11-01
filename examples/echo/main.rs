@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use pamin_kit::schemars::JsonSchema;
 use pamin_kit::{
-    Audience, Ctx, Feature, Hardware, Kit, Local, Manifest, Module, Ops, Routing, Space,
+    Audience, Ctx, Feature, Hardware, Hints, Kit, Local, Manifest, Module, Ops, Routing, Space,
 };
 use serde::{Deserialize, Serialize};
 
@@ -82,7 +82,18 @@ impl Module for Echo {
             Feature::Core,
             |m: Arc<Self>, ctx: Ctx, a: Wait| async move { m.wait(ctx.space(), a).await },
         )
-        .app("echo_say", "ui://echo/said", include_str!("said.html"));
+        .app("echo_say", "ui://echo/said", include_str!("said.html"))
+        .hints(
+            "echo_say",
+            Hints {
+                title: Some("Say"),
+                read_only: true,
+                idempotent: true,
+                open_world: false,
+                ..Hints::default()
+            },
+        )
+        .instructions("Use echo_say to hear text back; echo_wait for a slow reply.");
     }
 }
 

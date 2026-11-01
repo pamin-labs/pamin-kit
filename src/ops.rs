@@ -52,6 +52,38 @@ pub struct Tool {
     pub long: bool,
     /// The MCP App that shows this tool's results: a `ui://` resource.
     pub ui: Option<&'static str>,
+    /// What a host may assume about the tool, when the module says.
+    pub hints: Option<Hints>,
+}
+
+/// What a host may assume about a tool, sent as MCP tool annotations: hints
+/// for the host and the user, never guarantees. The defaults are MCP's: a
+/// tool may change things, destructively, not idempotently, and reach
+/// beyond the module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Hints {
+    /// A name for people, where the tool's name is for models.
+    pub title: Option<&'static str>,
+    /// Changes nothing.
+    pub read_only: bool,
+    /// May delete or overwrite; meaningful only when not read-only.
+    pub destructive: bool,
+    /// Calling it again with the same arguments changes nothing more.
+    pub idempotent: bool,
+    /// Reaches beyond the module's own data, such as the web.
+    pub open_world: bool,
+}
+
+impl Default for Hints {
+    fn default() -> Self {
+        Self {
+            title: None,
+            read_only: false,
+            destructive: true,
+            idempotent: false,
+            open_world: true,
+        }
+    }
 }
 
 /// An HTML page a host renders as an MCP App, served as a resource.
@@ -71,6 +103,7 @@ pub(crate) struct Op<M> {
 pub struct Ops<M> {
     pub(crate) list: Vec<Op<M>>,
     pub(crate) apps: Vec<App>,
+    pub(crate) instructions: Option<&'static str>,
 }
 
 impl<M: Send + Sync + 'static> Ops<M> {
@@ -78,6 +111,7 @@ impl<M: Send + Sync + 'static> Ops<M> {
         Self {
             list: Vec::new(),
             apps: Vec::new(),
+            instructions: None,
         }
     }
 
@@ -137,17 +171,38 @@ impl<M: Send + Sync + 'static> Ops<M> {
             uri.starts_with("ui://"),
             "the app {uri} must be a ui:// URI"
         );
-        let op = self
-            .list
-            .iter_mut()
-            .find(|op| op.tool.name == tool)
-            .unwrap_or_else(|| panic!("register {tool} before its app"));
-        op.tool.ui = Some(uri);
+        self.registered(tool).ui = Some(uri);
         match self.apps.iter().find(|app| app.uri == uri) {
             Some(app) => assert_eq!(app.html, html, "{uri} already serves another page"),
             None => self.apps.push(App { uri, html }),
         }
         self
+    }
+
+    /// Tells hosts what they may assume about `tool`.
+    ///
+    /// # Panics
+    ///
+    /// When `tool` is not registered yet.
+    pub fn hints(&mut self, tool: &str, hints: Hints) -> &mut Self {
+        self.registered(tool).hints = Some(hints);
+        self
+    }
+
+    /// Guidance for a model on using the module's tools, sent when a client
+    /// connects, for hosts that do not load the module's `SKILL.md`.
+    pub fn instructions(&mut self, text: &'static str) -> &mut Self {
+        self.instructions = Some(text);
+        self
+    }
+
+    /// The registered tool `name`, to describe further.
+    fn registered(&mut self, name: &str) -> &mut Tool {
+        self.list
+            .iter_mut()
+            .map(|op| &mut op.tool)
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("register {name} before describing it"))
     }
 
     fn add<A, R, E, F, Fut>(
@@ -202,6 +257,7 @@ impl<M: Send + Sync + 'static> Ops<M> {
                 output,
                 long,
                 ui: None,
+                hints: None,
             },
             call,
         });

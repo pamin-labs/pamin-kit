@@ -88,6 +88,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         self.ops.list.iter().map(|op| &op.tool)
     }
 
+    /// The module's guidance for a model, if it gave any.
+    pub fn instructions(&self) -> Option<&'static str> {
+        self.ops.instructions
+    }
+
     /// Every registered MCP App page.
     pub fn apps(&self) -> &[App] {
         &self.ops.apps
