@@ -913,7 +913,7 @@ pub struct HttpOptions {
 #[cfg(feature = "http")]
 #[derive(Clone, Debug)]
 pub struct ProtectedResource {
-    /// The server's public URL, such as `https://memory.example.com/mcp`.
+    /// The server's public URL, such as `https://notes.example.com/mcp`.
     pub resource: String,
     /// The authorization servers that issue its tokens.
     pub authorization_servers: Vec<String>,
