@@ -91,3 +91,11 @@ fn schemas_come_from_the_contract_types() {
         json!(["text", "project"])
     );
 }
+
+#[tokio::test]
+async fn the_local_project_is_the_working_directory() {
+    let local = Local::from_working_directory().unwrap();
+    let space = local.identify(None).await.unwrap();
+    let here = std::env::current_dir().unwrap().canonicalize().unwrap();
+    assert_eq!(space.project, here.to_string_lossy());
+}

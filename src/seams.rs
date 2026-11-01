@@ -59,6 +59,13 @@ pub struct Local {
 }
 
 impl Local {
+    /// The project named by the working directory, canonicalized so that
+    /// two paths to one directory are one project.
+    pub fn from_working_directory() -> std::io::Result<Self> {
+        let directory = std::env::current_dir()?.canonicalize()?;
+        Ok(Self::new(directory.to_string_lossy()))
+    }
+
     pub fn new(project: impl Into<String>) -> Self {
         Self {
             space: Arc::new(Space {
