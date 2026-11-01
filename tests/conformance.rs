@@ -108,3 +108,29 @@ impl Module for Counting {
 fn a_prompt_argument_that_is_not_a_string_fails() {
     pamin_kit::conformance::check(Counting, std::path::Path::new("examples/echo/SKILL.md"));
 }
+
+/// Names its tool after nothing in particular.
+struct Sloppy;
+
+impl Module for Sloppy {
+    fn manifest(&self) -> Manifest {
+        Manifest {
+            name: "sloppy",
+            ..Leaky.manifest()
+        }
+    }
+
+    fn register(&self, ops: &mut Ops<Self>) {
+        ops.tool(
+            "ReadNotes",
+            Feature::Core,
+            |_: Arc<Self>, _: Ctx, _: Count| async { Ok::<_, String>(()) },
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "ReadNotes: a tool is named sloppy_<action> in snake case")]
+fn a_tool_outside_the_naming_convention_fails() {
+    pamin_kit::conformance::check(Sloppy, std::path::Path::new("examples/echo/SKILL.md"));
+}
