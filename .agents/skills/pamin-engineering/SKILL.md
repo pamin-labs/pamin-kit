@@ -11,7 +11,7 @@ Every Pamin Labs repository holds code to the same bar: high performance, low re
 
 1. **Does it need to exist?** Build what a real caller needs now. No options, layers, traits or config for a second use that has not appeared; add them when it does.
 2. **Does it already exist here?** Search the repository (and the shared crates `pamin-runtime` and `pamin-kit`) for the same concern. Extend the owner of a concern through its interface; never add a parallel version with its own rules.
-3. **Does the standard library, then the platform, then a widely used maintained dependency cover it?** Write custom code only when none fits, and say why in the PR. Pin every dependency to an exact version.
+3. **Does the standard library, then the platform, then a widely used maintained dependency cover it?** Write custom code only when none fits, and say why in the PR. Lock files pin every dependency to an exact version; a published library requires caret minimums instead, so its consumers can unify, and pins exactly only with a stated reason.
 
 ## Shape of the code
 
