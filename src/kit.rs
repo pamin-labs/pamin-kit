@@ -18,10 +18,10 @@ use crate::ops::{
 use crate::seams::{
     Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage,
 };
-use crate::tasks::{MemoryTasks, StoredTask, TaskState, TaskStore};
+use crate::tasks::{InProcessTasks, StoredTask, TaskState, TaskStore};
 
 /// A module ready to serve, with the seams its calls go through.
-pub struct Kit<M, I = Local, E = Open, T = Unmetered, S = MemoryTasks> {
+pub struct Kit<M, I = Local, E = Open, T = Unmetered, S = InProcessTasks> {
     core: Core<M>,
     identity: I,
     entitlements: E,
@@ -78,7 +78,7 @@ impl<M: Module, I: Identity> Kit<M, I> {
             identity,
             entitlements: Open,
             metering: Unmetered,
-            tasks: MemoryTasks::default(),
+            tasks: InProcessTasks::default(),
         }
     }
 }

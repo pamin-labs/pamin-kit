@@ -86,11 +86,11 @@ pub trait TaskStore: Send + Sync + 'static {
     fn get(&self, id: &str) -> impl Future<Output = std::io::Result<Option<StoredTask>>> + Send;
 }
 
-/// The open-source store: tasks in this process's memory, gone when it exits.
+/// The open-source store: tasks held in this process, gone when it exits.
 /// Enough for one local server, where a reconnecting client reaches the same
 /// process.
 #[derive(Debug, Default)]
-pub struct MemoryTasks {
+pub struct InProcessTasks {
     tasks: Mutex<Kept>,
 }
 
@@ -104,7 +104,7 @@ struct Kept {
 /// How often expired tasks are dropped, at most.
 const SWEEP: Duration = Duration::from_secs(60);
 
-impl TaskStore for MemoryTasks {
+impl TaskStore for InProcessTasks {
     async fn put(&self, task: StoredTask, expected: Option<u64>) -> std::io::Result<bool> {
         let mut kept = self
             .tasks
@@ -166,7 +166,7 @@ mod tests {
 
     #[tokio::test]
     async fn only_the_writer_that_saw_the_current_version_writes() {
-        let store = MemoryTasks::default();
+        let store = InProcessTasks::default();
         assert!(store.put(task(0), None).await.unwrap());
         assert!(!store.put(task(0), None).await.unwrap(), "the id exists");
         assert!(store.put(task(1), Some(0)).await.unwrap());

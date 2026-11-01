@@ -24,4 +24,4 @@ pub use ops::{
 /// and the kit cannot disagree on its version.
 pub use schemars;
 pub use seams::{Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage};
-pub use tasks::{MemoryTasks, StoredTask, TASK_TTL, TaskState, TaskStore};
+pub use tasks::{InProcessTasks, StoredTask, TASK_TTL, TaskState, TaskStore};

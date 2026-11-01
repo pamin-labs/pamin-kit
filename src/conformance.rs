@@ -106,6 +106,7 @@ pub fn check<M: Module>(module: M, skill: &Path) -> Value {
             )),
         }
     }
+    failures.extend(naming(&kit));
     // A long operation registered as a tool would hold the connection open
     // and be lost on a reconnect; one registered as a task survives it.
     let tasks = kit.tools().any(|tool| tool.long);
@@ -166,6 +167,70 @@ fn feature(feature: Feature) -> &'static str {
         Feature::Core => "core",
         Feature::Pro(feature) => feature,
     }
+}
+
+/// Where names break the convention every module follows, so that hosts
+/// and models see one shape across modules: a module named in lowercase
+/// letters and digits; tools and prompts named `<module>_<action>` in
+/// snake case (and valid MCP tool names); resources under `<module>://`;
+/// app pages under `ui://<module>/`.
+fn naming<M: Module, I, E, T, S>(kit: &Kit<M, I, E, T, S>) -> Vec<String>
+where
+    I: crate::seams::Identity,
+    E: crate::seams::Entitlements,
+    T: crate::seams::Metering,
+    S: crate::tasks::TaskStore,
+{
+    let module = kit.manifest().name;
+    let mut failures = Vec::new();
+    let lower = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    if !module.starts_with(|c: char| c.is_ascii_lowercase()) || !module.chars().all(lower) {
+        failures.push(format!(
+            "module name {module:?} is not lowercase letters and digits"
+        ));
+    }
+    let prefix = format!("{module}_");
+    let snake = |name: &str| {
+        name.strip_prefix(&prefix).is_some_and(|action| {
+            !action.is_empty()
+                && !action.starts_with('_')
+                && !action.ends_with('_')
+                && action.chars().all(|c| lower(c) || c == '_')
+        })
+    };
+    for tool in kit.tools() {
+        let name = tool.name;
+        if !snake(name)
+            || !rmcp::handler::server::tool_name_validation::validate_and_warn_tool_name(name)
+        {
+            failures.push(format!(
+                "{name}: a tool is named {module}_<action> in snake case"
+            ));
+        }
+    }
+    for prompt in kit.prompts() {
+        let name = prompt.name;
+        if !snake(name) {
+            failures.push(format!(
+                "{name}: a prompt is named {module}_<action> in snake case"
+            ));
+        }
+    }
+    let scheme = format!("{module}://");
+    for resource in kit.resources() {
+        let uri = resource.uri;
+        if !uri.starts_with(&scheme) {
+            failures.push(format!("{uri}: a resource's URI starts with {scheme}"));
+        }
+    }
+    let pages = format!("ui://{module}/");
+    for app in kit.apps() {
+        let uri = app.uri;
+        if !uri.starts_with(&pages) {
+            failures.push(format!("{uri}: an app page's URI starts with {pages}"));
+        }
+    }
+    failures
 }
 
 /// The arguments of a prompt's schema that are not strings (or optional
@@ -293,15 +358,15 @@ mod tests {
 
     #[test]
     fn template_variables_are_found() {
-        let found: Vec<_> = variables("memory://{project}/topics/{topic}").collect();
-        assert_eq!(found, ["project", "topic"]);
-        assert_eq!(variables("memory://topics").count(), 0);
+        let found: Vec<_> = variables("notes://{project}/pages/{page}").collect();
+        assert_eq!(found, ["project", "page"]);
+        assert_eq!(variables("notes://pages").count(), 0);
     }
 
     #[test]
     fn a_tool_is_named_as_a_whole_word() {
-        assert!(names("Use `memory_read` to open a hit.", "memory_read"));
-        assert!(!names("memory_read_all", "memory_read"));
-        assert!(!names("my_memory_read", "memory_read"));
+        assert!(names("Use `notes_read` to open a page.", "notes_read"));
+        assert!(!names("notes_read_all", "notes_read"));
+        assert!(!names("my_notes_read", "notes_read"));
     }
 }
