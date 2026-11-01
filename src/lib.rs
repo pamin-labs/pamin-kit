@@ -20,8 +20,8 @@ mod trace;
 pub use kit::{CallError, Kit, Reply};
 pub use module::{Audience, Hardware, Manifest, Module, Routing};
 pub use ops::{
-    App, Ask, Body, Content, Ctx, Form, Hints, JsonObject, Message, NeedsInput, Ops, Prompt,
-    PromptArgument, Resource, Role, Tool,
+    App, Ask, Body, Content, Ctx, Form, Hints, Icon, JsonObject, Looks, Message, NeedsInput, Ops,
+    Prompt, PromptArgument, Resource, Role, Tool,
 };
 /// The schema generator contract types derive with, re-exported so a module
 /// and the kit cannot disagree on its version.

@@ -34,7 +34,7 @@ use tracing::Instrument;
 use crate::kit::Reply;
 use crate::kit::{CallError, Caller, Kit};
 use crate::module::Module;
-use crate::ops::{APP_MIME, Ask, Body, Content, Form, Hints, Progress, Role};
+use crate::ops::{APP_MIME, Ask, Body, Content, Form, Hints, Looks, Progress, Role};
 use crate::seams::{Entitlements, Identity, Metering, Space};
 use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
 use crate::trace;
@@ -47,20 +47,82 @@ fn ui(uri: &str) -> JsonObject {
     meta
 }
 
-/// A tool with its hints as MCP annotations; the title also names the tool.
+/// A tool with its hints as MCP annotations.
 fn annotated(tool: rmcp::model::Tool, hints: Hints) -> rmcp::model::Tool {
-    let title = hints.title.map(str::to_owned);
-    let annotations = ToolAnnotations::from_raw(
-        title.clone(),
+    let title = tool.title.clone();
+    tool.annotate(ToolAnnotations::from_raw(
+        title,
         Some(hints.read_only),
         Some(hints.destructive),
         Some(hints.idempotent),
         Some(hints.open_world),
-    );
-    let tool = tool.annotate(annotations);
-    match title {
-        Some(title) => tool.with_title(title),
-        None => tool,
+    ))
+}
+
+/// Applies the parts of `looks` that are set, with the builder each MCP
+/// type has for them: the one place looks become MCP.
+macro_rules! shown {
+    ($item:expr, $looks:expr) => {{
+        let looks: &Looks = $looks;
+        let item = $item;
+        let item = match looks.title {
+            Some(title) => item.with_title(title),
+            None => item,
+        };
+        match icons(looks) {
+            Some(icons) => item.with_icons(icons),
+            None => item,
+        }
+    }};
+}
+
+/// A resource or template shown with its looks, annotations included.
+macro_rules! shown_resource {
+    ($item:expr, $looks:expr) => {{
+        let looks: &Looks = $looks;
+        let item = shown!($item, looks);
+        let item = match looks.mime {
+            Some(mime) => item.with_mime_type(mime),
+            None => item,
+        };
+        match annotations(looks) {
+            Some(annotations) => item.with_annotations(annotations),
+            None => item,
+        }
+    }};
+}
+
+fn icons(looks: &Looks) -> Option<Vec<rmcp::model::Icon>> {
+    (!looks.icons.is_empty()).then(|| {
+        looks
+            .icons
+            .iter()
+            .map(|icon| {
+                let mut shown = rmcp::model::Icon::new(icon.src);
+                shown.mime_type = icon.mime.map(str::to_owned);
+                shown.sizes = (!icon.sizes.is_empty())
+                    .then(|| icon.sizes.iter().map(|size| (*size).to_owned()).collect());
+                shown
+            })
+            .collect()
+    })
+}
+
+fn annotations(looks: &Looks) -> Option<rmcp::model::Annotations> {
+    if looks.audience.is_empty() && looks.priority.is_none() {
+        return None;
+    }
+    let mut annotations = rmcp::model::Annotations::default();
+    annotations.audience =
+        (!looks.audience.is_empty()).then(|| looks.audience.iter().copied().map(role).collect());
+    annotations.priority = looks.priority;
+    Some(annotations)
+}
+
+fn role(role: Role) -> rmcp::model::Role {
+    match role {
+        Role::User => rmcp::model::Role::User,
+        Role::Assistant => rmcp::model::Role::Assistant,
     }
 }
 
@@ -97,6 +159,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<
                     Some(output) => listed.with_raw_output_schema(output.clone()),
                     None => listed,
                 };
+                let listed = shown!(listed, &tool.looks);
                 let listed = match tool.ui {
                     Some(uri) => listed.with_meta(MetaObject(ui(uri))),
                     None => listed,
@@ -138,10 +201,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
                 .build()
                 .extensions;
         }
-        let info = ServerConfig::new(capabilities).with_server_info(Implementation::new(
-            manifest.name,
-            manifest.contract_version,
-        ));
+        let implementation = shown!(
+            Implementation::new(manifest.name, manifest.contract_version),
+            self.kit.looks()
+        );
+        let info = ServerConfig::new(capabilities).with_server_info(implementation);
         match self.kit.instructions() {
             Some(text) => info.with_instructions(text),
             None => info,
@@ -228,7 +292,9 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
             .kit
             .resources()
             .filter(|resource| !resource.is_template())
-            .map(|resource| Resource::new(resource.uri, resource.name));
+            .map(|resource| {
+                shown_resource!(Resource::new(resource.uri, resource.name), &resource.looks)
+            });
         Ok(ListResourcesResult::with_all_items(
             pages.chain(resources).collect(),
         ))
@@ -244,7 +310,10 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
             .resources()
             .filter(|resource| resource.is_template())
             .map(|resource| {
-                let template = ResourceTemplate::new(resource.uri, resource.name);
+                let template = shown_resource!(
+                    ResourceTemplate::new(resource.uri, resource.name),
+                    &resource.looks
+                );
                 match &resource.description {
                     Some(text) => template.with_description(text),
                     None => template,
@@ -294,7 +363,14 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
                     }
                 })
                 .collect();
-            rmcp::model::Prompt::new(prompt.name, prompt.description.as_deref(), Some(arguments))
+            shown!(
+                rmcp::model::Prompt::new(
+                    prompt.name,
+                    prompt.description.as_deref(),
+                    Some(arguments)
+                ),
+                &prompt.looks
+            )
         });
         Ok(ListPromptsResult::with_all_items(prompts.collect()))
     }
@@ -315,13 +391,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         let result = respond(result, |messages| {
             let messages = messages
                 .into_iter()
-                .map(|message| {
-                    let role = match message.role {
-                        Role::User => rmcp::model::Role::User,
-                        Role::Assistant => rmcp::model::Role::Assistant,
-                    };
-                    PromptMessage::new(role, block(message.content))
-                })
+                .map(|message| PromptMessage::new(role(message.role), block(message.content)))
                 .collect();
             GetPromptResult::new(messages)
         });

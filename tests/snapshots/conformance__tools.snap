@@ -14,6 +14,13 @@ expression: tools
       ],
       "description": "Starts a conversation about something to say.",
       "feature": "core",
+      "looks": {
+        "audience": [],
+        "icons": [],
+        "mime": null,
+        "priority": null,
+        "title": null
+      },
       "name": "echo_greet"
     }
   ],
@@ -21,12 +28,28 @@ expression: tools
     {
       "description": null,
       "feature": "core",
+      "looks": {
+        "audience": [
+          "user"
+        ],
+        "icons": [],
+        "mime": "text/plain",
+        "priority": 0.20000000298023224,
+        "title": "About echo"
+      },
       "name": "About echo",
       "uri": "echo://about"
     },
     {
       "description": "Text to say, as a resource: what reading it would say back.",
       "feature": "core",
+      "looks": {
+        "audience": [],
+        "icons": [],
+        "mime": null,
+        "priority": null,
+        "title": null
+      },
       "name": "Said",
       "uri": "echo://say/{text}"
     }
@@ -39,8 +62,7 @@ expression: tools
         "destructive": true,
         "idempotent": true,
         "open_world": false,
-        "read_only": true,
-        "title": "Say"
+        "read_only": true
       },
       "input": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -54,6 +76,13 @@ expression: tools
           "text"
         ],
         "type": "object"
+      },
+      "looks": {
+        "audience": [],
+        "icons": [],
+        "mime": null,
+        "priority": null,
+        "title": "Say"
       },
       "name": "echo_say",
       "output": {
@@ -92,6 +121,13 @@ expression: tools
         ],
         "type": "object"
       },
+      "looks": {
+        "audience": [],
+        "icons": [],
+        "mime": null,
+        "priority": null,
+        "title": null
+      },
       "name": "echo_shout",
       "output": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -120,6 +156,13 @@ expression: tools
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object"
       },
+      "looks": {
+        "audience": [],
+        "icons": [],
+        "mime": null,
+        "priority": null,
+        "title": null
+      },
       "name": "echo_dot",
       "output": null,
       "task": false,
@@ -132,6 +175,13 @@ expression: tools
       "input": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object"
+      },
+      "looks": {
+        "audience": [],
+        "icons": [],
+        "mime": null,
+        "priority": null,
+        "title": null
       },
       "name": "echo_visit",
       "output": null,
@@ -154,6 +204,13 @@ expression: tools
           "text"
         ],
         "type": "object"
+      },
+      "looks": {
+        "audience": [],
+        "icons": [],
+        "mime": null,
+        "priority": null,
+        "title": null
       },
       "name": "echo_confirm",
       "output": {
@@ -198,6 +255,13 @@ expression: tools
           "millis"
         ],
         "type": "object"
+      },
+      "looks": {
+        "audience": [],
+        "icons": [],
+        "mime": null,
+        "priority": null,
+        "title": null
       },
       "name": "echo_wait",
       "output": {

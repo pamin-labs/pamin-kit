@@ -26,6 +26,12 @@ async fn a_client_lists_and_calls_tools_over_stdio() {
     let info = client.peer_info().unwrap();
     assert_eq!(info.server_info.as_ref().unwrap().name, "echo");
     assert!(info.instructions.as_deref().unwrap().contains("echo_say"));
+    let server = info.server_info.as_ref().unwrap();
+    assert_eq!(server.title.as_deref(), Some("Echo"));
+    assert_eq!(
+        server.icons.as_ref().unwrap()[0].src,
+        "https://example.com/echo.svg"
+    );
 
     let tools = client.list_all_tools().await.unwrap();
     let names: Vec<_> = tools.iter().map(|tool| tool.name.as_ref()).collect();
@@ -133,6 +139,11 @@ async fn resources_and_templates_are_listed_and_read() {
     let listed = client.list_all_resources().await.unwrap();
     let uris: Vec<_> = listed.iter().map(|r| r.uri.as_str()).collect();
     assert_eq!(uris, ["ui://echo/said", "echo://about"]);
+    let about = &listed[1];
+    assert_eq!(about.title.as_deref(), Some("About echo"));
+    assert_eq!(about.mime_type.as_deref(), Some("text/plain"));
+    let annotations = about.annotations.as_ref().unwrap();
+    assert_eq!(annotations.priority, Some(0.2));
 
     let templates = client.list_all_resource_templates().await.unwrap();
     assert_eq!(templates[0].uri_template, "echo://say/{text}");
