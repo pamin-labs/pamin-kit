@@ -217,6 +217,12 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         }
     }
 
+    /// A tool by name, which rmcp's HTTP transport checks `Mcp-Param-*`
+    /// headers (SEP-2243) against.
+    fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+        self.tools.iter().find(|tool| tool.name == name).cloned()
+    }
+
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,

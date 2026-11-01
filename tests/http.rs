@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 
 mod common;
-use common::{call, rpc, serve};
+use common::{call, rpc, serve, serve_module};
 
 #[tokio::test]
 async fn any_request_is_served_on_its_own_with_the_callers_space() {
@@ -184,4 +184,52 @@ async fn a_page_to_open_is_asked_only_of_a_client_that_can() {
         .as_str()
         .unwrap_or_default();
     assert!(text.contains("cannot do"), "{refused}");
+}
+
+/// A module whose tool mirrors an argument in an HTTP header (SEP-2243),
+/// for gateways that route on it.
+struct Regional;
+
+/// Looks up a place.
+#[derive(serde::Deserialize, pamin_kit::schemars::JsonSchema)]
+struct Find {
+    #[schemars(extend("x-mcp-header" = "Region"))]
+    region: String,
+}
+
+impl pamin_kit::Module for Regional {
+    fn manifest(&self) -> pamin_kit::Manifest {
+        pamin_kit::Manifest {
+            name: "places",
+            contract_version: "1.0.0",
+            routing: pamin_kit::Routing::Stateless,
+            long_running: false,
+            scopes: vec![],
+            metering_unit: "call",
+            hardware: pamin_kit::Hardware::default(),
+            audience: pamin_kit::Audience::default(),
+        }
+    }
+
+    fn register(&self, ops: &mut pamin_kit::Ops<Self>) {
+        ops.tool(
+            "places_find",
+            pamin_kit::Feature::Core,
+            |_: std::sync::Arc<Self>, _: pamin_kit::Ctx, find: Find| async move {
+                Ok::<_, String>(find.region)
+            },
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_argument_mirrored_in_a_header_must_match_it() {
+    let address = serve_module(Regional).await;
+    // The client sends no `Mcp-Param-Region` header: the transport checks
+    // the tool's schema, which the kit hands it, and refuses the call.
+    let find = call("places_find", json!({"region": "eu"}));
+    let (status, refused) = rpc(address, "ada", false, "tools/call", find).await;
+    assert_eq!(status, 400, "{refused}");
+    let message = refused["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("Mcp-Param-Region"), "{refused}");
 }
