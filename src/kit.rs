@@ -15,14 +15,19 @@ use crate::tasks::{MemoryTasks, StoredTask, TaskState, TaskStore};
 
 /// A module ready to serve, with the seams its calls go through.
 pub struct Kit<M, I = Local, E = Open, T = Unmetered, S = MemoryTasks> {
-    module: Arc<M>,
-    manifest: Manifest,
-    /// Everything the module registered.
-    ops: Ops<M>,
+    core: Core<M>,
     identity: I,
     entitlements: E,
     metering: T,
     tasks: S,
+}
+
+/// The module and what it registered: everything but the seams, so that
+/// choosing a seam moves one field however the kit grows.
+struct Core<M> {
+    module: Arc<M>,
+    manifest: Manifest,
+    ops: Ops<M>,
 }
 
 impl<M: Module, I: Identity> Kit<M, I> {
@@ -31,9 +36,11 @@ impl<M: Module, I: Identity> Kit<M, I> {
         let mut ops = Ops::new();
         module.register(&mut ops);
         Self {
-            manifest: module.manifest(),
-            module: Arc::new(module),
-            ops,
+            core: Core {
+                manifest: module.manifest(),
+                module: Arc::new(module),
+                ops,
+            },
             identity,
             entitlements: Open,
             metering: Unmetered,
@@ -45,9 +52,7 @@ impl<M: Module, I: Identity> Kit<M, I> {
 impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, I, E, T, S> {
     pub fn with_entitlements<E2: Entitlements>(self, entitlements: E2) -> Kit<M, I, E2, T, S> {
         Kit {
-            module: self.module,
-            manifest: self.manifest,
-            ops: self.ops,
+            core: self.core,
             identity: self.identity,
             entitlements,
             metering: self.metering,
@@ -57,9 +62,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
 
     pub fn with_metering<T2: Metering>(self, metering: T2) -> Kit<M, I, E, T2, S> {
         Kit {
-            module: self.module,
-            manifest: self.manifest,
-            ops: self.ops,
+            core: self.core,
             identity: self.identity,
             entitlements: self.entitlements,
             metering,
@@ -69,9 +72,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
 
     pub fn with_tasks<S2: TaskStore>(self, tasks: S2) -> Kit<M, I, E, T, S2> {
         Kit {
-            module: self.module,
-            manifest: self.manifest,
-            ops: self.ops,
+            core: self.core,
             identity: self.identity,
             entitlements: self.entitlements,
             metering: self.metering,
@@ -80,22 +81,22 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     }
 
     pub fn manifest(&self) -> &Manifest {
-        &self.manifest
+        &self.core.manifest
     }
 
     /// Every registered operation, in registration order.
     pub fn tools(&self) -> impl Iterator<Item = &Tool> {
-        self.ops.list.iter().map(|op| &op.tool)
+        self.core.ops.list.iter().map(|op| &op.tool)
     }
 
     /// The module's guidance for a model, if it gave any.
     pub fn instructions(&self) -> Option<&'static str> {
-        self.ops.instructions
+        self.core.ops.instructions
     }
 
     /// Every registered MCP App page.
     pub fn apps(&self) -> &[App] {
-        &self.ops.apps
+        &self.core.ops.apps
     }
 
     /// The registered operation `name`.
@@ -130,7 +131,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         let task = StoredTask {
             id: uuid::Uuid::new_v4().to_string(),
             space: Space::clone(&space),
-            operation: self.ops.list[index].tool.name.to_owned(),
+            operation: self.core.ops.list[index].tool.name.to_owned(),
             state: TaskState::Working,
             created_at: now,
             updated_at: now,
@@ -195,12 +196,13 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         let space = self.identify(bearer).await?;
         // ponytail: linear scan; a module has a handful of operations.
         let index = self
+            .core
             .ops
             .list
             .iter()
             .position(|op| op.tool.name == name)
             .ok_or_else(|| CallError::Unknown(name.to_owned()))?;
-        let feature = self.ops.list[index].tool.feature;
+        let feature = self.core.ops.list[index].tool.feature;
         if !self.entitlements.allows(&space, feature) {
             return Err(CallError::NotEntitled(feature));
         }
@@ -214,9 +216,9 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         space: Arc<Space>,
         arguments: JsonObject,
     ) -> Result<Value, String> {
-        let op = &self.ops.list[index];
+        let op = &self.core.ops.list[index];
         let started = Instant::now();
-        let result = (op.call)(self.module.clone(), Ctx::new(space.clone()), arguments).await;
+        let result = (op.call)(self.core.module.clone(), Ctx::new(space.clone()), arguments).await;
         self.metering.record(
             &space,
             Usage {
