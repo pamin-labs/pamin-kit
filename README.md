@@ -1,6 +1,6 @@
 # pamin-kit
 
-The framework Pamin modules are built on. A module registers its operations once; the kit serves them as MCP over stdio and Streamable HTTP, and does around every call what each module would otherwise repeat: knowing who is calling, checking what they may use, recording usage, running long work as tasks, asking the user, and tracing. Used by [PaminMemory](https://github.com/pamin-labs/PaminMemory).
+The framework Pamin modules are built on. A module registers its operations once; the kit serves them as MCP over stdio and Streamable HTTP, and does around every call what each module would otherwise repeat: knowing who is calling, checking what they may use, recording usage, running long work as tasks, asking the user, and tracing. Used by [pamin-memory](https://github.com/pamin-labs/pamin-memory).
 
 Released on [crates.io](https://crates.io/crates/pamin-kit); 0.x until a second module runs on it, so minor versions may break the API. Licensed under Apache-2.0.
 
