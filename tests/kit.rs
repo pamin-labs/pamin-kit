@@ -120,3 +120,23 @@ async fn cancelling_a_task_reaches_its_operation() {
     let cancelled = kit.task(None, &task.id).await.unwrap();
     assert_eq!(cancelled.state, pamin_kit::TaskState::Cancelled);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_first_of_finishing_and_cancelling_wins() {
+    let kit = Arc::new(Kit::new(Echo, Local::new("notes")));
+    for _ in 0..200 {
+        let wait = args(json!({"text": "now", "millis": 0}));
+        let task = kit.start("echo_wait", None, wait).await.unwrap();
+        let cancelled = kit.cancel(None, &task.id).await.unwrap();
+        // Whichever won, the task never changes after it is final.
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        let now = kit.task(None, &task.id).await.unwrap();
+        assert!(now.state.is_terminal());
+        if cancelled.state.is_terminal() {
+            assert_eq!(now.state, cancelled.state, "a final state was overwritten");
+        }
+    }
+}

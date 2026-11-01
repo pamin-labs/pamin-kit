@@ -328,8 +328,13 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             status: None,
             created_at: now,
             updated_at: now,
+            version: 0,
         };
-        self.tasks.put(task.clone()).await.map_err(unavailable)?;
+        // A fresh id: no other writer can hold it.
+        self.tasks
+            .put(task.clone(), None)
+            .await
+            .map_err(unavailable)?;
         // The request that started the task ends now, so the task gets a
         // token of its own, which cancelling the task triggers.
         let cancel = CancellationToken::new();
@@ -348,7 +353,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
                 Err(message) => TaskState::Errored(message),
             };
             kit.running().remove(&started.id);
-            if let Err(error) = kit.finish(started, state).await {
+            if let Err(error) = kit.finish(&started.id, state).await {
                 tracing::error!(%error, "a finished task could not be stored");
             }
         }));
@@ -371,31 +376,26 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     /// its state is whole, and its result is discarded; the kit never stops
     /// it between two awaits.
     pub async fn cancel(&self, bearer: Option<&str>, id: &str) -> Result<StoredTask, CallError> {
-        let task = self.task(bearer, id).await?;
-        if task.state.is_terminal() {
-            return Ok(task);
-        }
+        self.task(bearer, id).await?;
         if let Some(cancel) = self.running().get(id) {
             cancel.cancel();
         }
-        self.finish(task, TaskState::Cancelled)
+        self.finish(id, TaskState::Cancelled)
             .await
-            .map_err(unavailable)
+            .map_err(unavailable)?
+            .ok_or_else(|| CallError::NoTask(id.to_owned()))
     }
 
     /// Sets a running task's status message, which pollers see.
     async fn status(&self, id: &str, status: String) -> std::io::Result<()> {
-        match self.tasks.get(id).await? {
-            Some(task) if !task.state.is_terminal() => {
-                let task = StoredTask {
-                    status: Some(status),
-                    updated_at: SystemTime::now(),
-                    ..task
-                };
-                self.tasks.put(task).await
-            }
-            _ => Ok(()),
-        }
+        self.transition(id, |task| {
+            (!task.state.is_terminal()).then(|| StoredTask {
+                status: Some(status.clone()),
+                ..task.clone()
+            })
+        })
+        .await
+        .map(drop)
     }
 
     fn running(&self) -> std::sync::MutexGuard<'_, HashMap<String, CancellationToken>> {
@@ -480,20 +480,44 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         result
     }
 
-    /// Stores `task` in its final `state`, unless it was cancelled meanwhile.
-    async fn finish(&self, task: StoredTask, state: TaskState) -> std::io::Result<StoredTask> {
-        if let Some(now) = self.tasks.get(&task.id).await?
-            && now.state.is_terminal()
-        {
-            return Ok(now);
+    /// Puts task `id` in its final `state`, unless it already has one: the
+    /// first of finishing and cancelling wins. Returns the task as stored,
+    /// or `None` when no task `id` is kept.
+    async fn finish(&self, id: &str, state: TaskState) -> std::io::Result<Option<StoredTask>> {
+        self.transition(id, |task| {
+            (!task.state.is_terminal()).then(|| StoredTask {
+                state: state.clone(),
+                ..task.clone()
+            })
+        })
+        .await
+    }
+
+    /// Changes task `id` with `change`, atomically against every other
+    /// writer: reads it, asks `change` for the next state (`None`: leave it
+    /// as it is), and writes that only if nobody wrote in between, reading
+    /// again if somebody did. The one way the kit changes a task.
+    async fn transition(
+        &self,
+        id: &str,
+        change: impl Fn(&StoredTask) -> Option<StoredTask>,
+    ) -> std::io::Result<Option<StoredTask>> {
+        loop {
+            let Some(current) = self.tasks.get(id).await? else {
+                return Ok(None);
+            };
+            let Some(next) = change(&current) else {
+                return Ok(Some(current));
+            };
+            let next = StoredTask {
+                version: current.version + 1,
+                updated_at: SystemTime::now(),
+                ..next
+            };
+            if self.tasks.put(next.clone(), Some(current.version)).await? {
+                return Ok(Some(next));
+            }
         }
-        let task = StoredTask {
-            state,
-            updated_at: SystemTime::now(),
-            ..task
-        };
-        self.tasks.put(task.clone()).await?;
-        Ok(task)
     }
 }
 
