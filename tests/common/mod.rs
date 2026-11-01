@@ -4,7 +4,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use pamin_kit::{Identity, Kit, Space};
+use pamin_kit::{Identity, Kit, Module, Space};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -30,13 +30,18 @@ impl Identity for Tokens {
 }
 
 pub async fn serve() -> SocketAddr {
+    serve_module(echo::Echo).await
+}
+
+/// Serves `module` with one space per token.
+pub async fn serve_module<M: Module>(module: M) -> SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let options = pamin_kit::HttpOptions {
         allowed_hosts: vec!["127.0.0.1".into()],
         protected: None,
     };
-    tokio::spawn(Kit::new(echo::Echo, Tokens).serve_http(listener, options));
+    tokio::spawn(Kit::new(module, Tokens).serve_http(listener, options));
     address
 }
 

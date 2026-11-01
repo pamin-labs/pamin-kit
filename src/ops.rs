@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{ElicitResult, ElicitationAction};
@@ -341,6 +341,11 @@ pub struct Looks {
     pub audience: &'static [Role],
     /// How much a resource matters, from 0 (least) to 1 (most).
     pub priority: Option<f32>,
+    /// What the server is, for people: the server only, since tools,
+    /// prompts and resources take theirs from doc comments.
+    pub about: Option<&'static str>,
+    /// The server's home page: the server only.
+    pub website: Option<&'static str>,
 }
 
 /// An icon, by URL or `data:` URI.
@@ -542,6 +547,17 @@ pub(crate) struct Promptable<M> {
 }
 
 /// Completes one argument of a prompt or variable of a resource template.
+/// What the user has typed so far, for suggesting the rest.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Completing {
+    /// The argument's value so far.
+    pub typed: String,
+    /// The arguments the user already gave, by name: a project chosen
+    /// first narrows the pages suggested next.
+    #[serde(default)]
+    pub given: HashMap<String, String>,
+}
+
 pub(crate) struct Completer<M> {
     /// A prompt's name or a resource template's URI.
     pub target: &'static str,
@@ -752,7 +768,7 @@ impl<M: Send + Sync + 'static> Ops<M> {
     ) -> &mut Self
     where
         E: std::fmt::Display,
-        F: Fn(Arc<M>, Ctx, String) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<M>, Ctx, Completing) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Vec<String>, E>> + Send + 'static,
     {
         let known = self.prompts.iter().any(|p| p.prompt.name == target)

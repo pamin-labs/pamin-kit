@@ -13,8 +13,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::module::{Manifest, Module};
 use crate::ops::{
-    APP_MIME, App, Ask, Body, Content, Ctx, JsonObject, Looks, Message, Ops, Progress, Prompt,
-    Resource, Tool, with_input,
+    APP_MIME, App, Ask, Body, Completing, Content, Ctx, JsonObject, Looks, Message, Ops, Progress,
+    Prompt, Resource, Tool, with_input,
 };
 use crate::seams::{
     Change, ChangeFeed, Entitlements, Feature, Identity, InProcessChanges, Local, Metering, Open,
@@ -267,13 +267,13 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     }
 
     /// Suggestions for `argument` of `target` (a prompt or a resource
-    /// template) starting from `typed`; none when the module completes it
+    /// template) from what the user typed; none when the module completes it
     /// not.
     pub(crate) async fn complete_as(
         &self,
         target: &str,
         argument: &str,
-        typed: String,
+        completing: Completing,
         caller: Caller<'_>,
     ) -> Result<Vec<String>, CallError> {
         let space = self.identified(&caller).await?;
@@ -299,7 +299,8 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         self.entitled(&space, feature)?;
         let ctx = Ctx::new(space, caller.cancel, caller.progress);
         self.metered(completer.target, feature, ctx, caller.answers, |ctx| {
-            (completer.complete)(self.core.module.clone(), ctx, Value::String(typed))
+            let completing = serde_json::to_value(completing).unwrap_or_default();
+            (completer.complete)(self.core.module.clone(), ctx, completing)
         })
         .await
         .map(|(value, _)| value)

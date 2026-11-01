@@ -7,6 +7,11 @@ expression: tools
     {
       "arguments": [
         {
+          "description": "How, such as `Hello`.",
+          "name": "greeting",
+          "required": false
+        },
+        {
           "description": "Who to greet.",
           "name": "name",
           "required": true
@@ -15,11 +20,13 @@ expression: tools
       "description": "Starts a conversation about something to say.",
       "feature": "core",
       "looks": {
+        "about": null,
         "audience": [],
         "icons": [],
         "mime": null,
         "priority": null,
-        "title": null
+        "title": null,
+        "website": null
       },
       "name": "echo_greet"
     }
@@ -29,13 +36,15 @@ expression: tools
       "description": null,
       "feature": "core",
       "looks": {
+        "about": null,
         "audience": [
           "user"
         ],
         "icons": [],
         "mime": "text/plain",
         "priority": 0.20000000298023224,
-        "title": "About echo"
+        "title": "About echo",
+        "website": null
       },
       "name": "About echo",
       "uri": "echo://about"
@@ -44,11 +53,13 @@ expression: tools
       "description": "Text to say, as a resource: what reading it would say back.",
       "feature": "core",
       "looks": {
+        "about": null,
         "audience": [],
         "icons": [],
         "mime": null,
         "priority": null,
-        "title": null
+        "title": null,
+        "website": null
       },
       "name": "Said",
       "uri": "echo://say/{text}"
@@ -79,11 +90,13 @@ expression: tools
         "type": "object"
       },
       "looks": {
+        "about": null,
         "audience": [],
         "icons": [],
         "mime": null,
         "priority": null,
-        "title": "Say"
+        "title": "Say",
+        "website": null
       },
       "name": "echo_say",
       "output": {
@@ -124,11 +137,13 @@ expression: tools
         "type": "object"
       },
       "looks": {
+        "about": null,
         "audience": [],
         "icons": [],
         "mime": null,
         "priority": null,
-        "title": null
+        "title": null,
+        "website": null
       },
       "name": "echo_shout",
       "output": {
@@ -160,11 +175,13 @@ expression: tools
         "type": "object"
       },
       "looks": {
+        "about": null,
         "audience": [],
         "icons": [],
         "mime": null,
         "priority": null,
-        "title": null
+        "title": null,
+        "website": null
       },
       "name": "echo_dot",
       "output": null,
@@ -181,11 +198,13 @@ expression: tools
         "type": "object"
       },
       "looks": {
+        "about": null,
         "audience": [],
         "icons": [],
         "mime": null,
         "priority": null,
-        "title": null
+        "title": null,
+        "website": null
       },
       "name": "echo_unsay",
       "output": null,
@@ -202,11 +221,13 @@ expression: tools
         "type": "object"
       },
       "looks": {
+        "about": null,
         "audience": [],
         "icons": [],
         "mime": null,
         "priority": null,
-        "title": null
+        "title": null,
+        "website": null
       },
       "name": "echo_visit",
       "output": null,
@@ -232,11 +253,13 @@ expression: tools
         "type": "object"
       },
       "looks": {
+        "about": null,
         "audience": [],
         "icons": [],
         "mime": null,
         "priority": null,
-        "title": null
+        "title": null,
+        "website": null
       },
       "name": "echo_confirm",
       "output": {
@@ -284,11 +307,13 @@ expression: tools
         "type": "object"
       },
       "looks": {
+        "about": null,
         "audience": [],
         "icons": [],
         "mime": null,
         "priority": null,
-        "title": null
+        "title": null,
+        "website": null
       },
       "name": "echo_wait",
       "output": {

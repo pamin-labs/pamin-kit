@@ -33,7 +33,7 @@ use tracing::Instrument;
 use crate::kit::Reply;
 use crate::kit::{CallError, Caller, Kit};
 use crate::module::Module;
-use crate::ops::{APP_MIME, Ask, Body, Content, Form, Hints, Looks, Progress, Role};
+use crate::ops::{APP_MIME, Ask, Body, Completing, Content, Form, Hints, Looks, Progress, Role};
 use crate::seams::{Entitlements, Identity, Metering, Space};
 use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
 use crate::trace;
@@ -206,15 +206,24 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
                 .build()
                 .extensions;
         }
-        let implementation = shown!(
+        let looks = self.kit.looks();
+        let mut implementation = shown!(
             Implementation::new(manifest.name, manifest.contract_version),
-            self.kit.looks()
+            looks
         );
+        implementation.description = looks.about.map(str::to_owned);
+        implementation.website_url = looks.website.map(str::to_owned);
         let info = ServerConfig::new(capabilities).with_server_info(implementation);
         match self.kit.instructions() {
             Some(text) => info.with_instructions(text),
             None => info,
         }
+    }
+
+    /// A tool by name, which rmcp's HTTP transport checks `Mcp-Param-*`
+    /// headers (SEP-2243) against.
+    fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+        self.tools.iter().find(|tool| tool.name == name).cloned()
     }
 
     async fn list_tools(
@@ -423,7 +432,13 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
             .complete_as(
                 target,
                 &request.argument.name,
-                request.argument.value.clone(),
+                Completing {
+                    typed: request.argument.value.clone(),
+                    given: request
+                        .context
+                        .and_then(|context| context.arguments)
+                        .unwrap_or_default(),
+                },
                 caller(&context, None),
             )
             .instrument(span.clone())
