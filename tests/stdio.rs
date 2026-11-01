@@ -236,3 +236,40 @@ async fn an_operation_asks_the_user_and_runs_again_with_the_answer() {
         client.cancel().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn a_listener_hears_only_the_resources_it_asked_for() {
+    let transport = TokioChildProcess::new(tokio::process::Command::new(example())).unwrap();
+    // 2026-07-28 has no initialize handshake: the client discovers the
+    // server and sends its version with every request.
+    let modern = rmcp::ClientLifecycleMode::Discover {
+        preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
+    };
+    let client = rmcp::ClientServiceExt::serve_with_lifecycle((), transport, modern)
+        .await
+        .unwrap();
+    let mut filter = rmcp::model::SubscriptionFilter::default();
+    filter.resource_subscriptions = Some(vec!["echo://say/hi".into()]);
+    let mut listening = client.peer().listen(filter).await.unwrap();
+
+    for text in ["other", "hi"] {
+        let say = CallToolRequestParams::new("echo_say")
+            .with_arguments(json!({"text": text}).as_object().unwrap().clone());
+        client.call_tool(say).await.unwrap();
+    }
+    // The change to echo://say/other was not asked for, so the first one
+    // heard is echo://say/hi.
+    let heard = tokio::time::timeout(std::time::Duration::from_secs(5), listening.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let rmcp::model::ServerNotification::ResourceUpdatedNotification(update) = heard else {
+        panic!("{heard:?}");
+    };
+    assert_eq!(update.params.uri, "echo://say/hi");
+    // rmcp drains a closed stdio connection's open requests for up to five
+    // seconds before it stops a listener, so closing takes that long.
+    drop(listening);
+    client.cancel().await.unwrap();
+}

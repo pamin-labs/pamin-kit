@@ -117,7 +117,12 @@ impl Module for Echo {
         ops.tool(
             "echo_say",
             Feature::Core,
-            |m: Arc<Self>, ctx: Ctx, a: Say| async move { m.say(ctx.space(), a).await },
+            |m: Arc<Self>, ctx: Ctx, a: Say| async move {
+                let said = m.say(ctx.space(), a).await?;
+                // What reading echo://say/{text} gives has just been said.
+                ctx.updated(format!("echo://say/{}", said.text));
+                Ok::<_, String>(said)
+            },
         )
         .tool(
             "echo_shout",

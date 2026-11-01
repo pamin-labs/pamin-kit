@@ -89,3 +89,63 @@ async fn an_operation_asks_a_new_client_through_mrtr() {
     let (_, said) = rpc(address, "ada", false, "tools/call", answered).await;
     assert_eq!(said["result"]["structuredContent"]["text"], "hi", "{said}");
 }
+
+/// Opens a subscriptions/listen stream as `bearer` for `uri`, and reads it
+/// for `wait`: whether a resources/updated notification arrived.
+async fn hears(address: std::net::SocketAddr, bearer: &str, uri: &str, wait: Duration) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let body = json!({
+        "jsonrpc": "2.0", "id": 9, "method": "subscriptions/listen",
+        "params": {
+            "notifications": {"resourceSubscriptions": [uri]},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1"},
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }
+    })
+    .to_string();
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+         Accept: application/json, text/event-stream\r\nMCP-Protocol-Version: 2026-07-28\r\n\
+         Mcp-Method: subscriptions/listen\r\nAuthorization: Bearer {bearer}\r\n\
+         Content-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut seen = String::new();
+    let mut buffer = [0u8; 4096];
+    let deadline = tokio::time::Instant::now() + wait;
+    while let Ok(Ok(read)) = tokio::time::timeout_at(deadline, stream.read(&mut buffer)).await {
+        if read == 0 {
+            break;
+        }
+        seen.push_str(&String::from_utf8_lossy(&buffer[..read]));
+        if seen.contains("notifications/resources/updated") {
+            return true;
+        }
+    }
+    false
+}
+
+#[tokio::test]
+async fn a_listener_hears_changes_in_its_own_space_only() {
+    let address = serve().await;
+    let wait = Duration::from_millis(500);
+    let ada = tokio::spawn(hears(address, "ada", "echo://say/hi", wait));
+    let bob = tokio::spawn(hears(address, "bob", "echo://say/hi", wait));
+    // Both listeners are up before Ada says it.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    rpc(
+        address,
+        "ada",
+        false,
+        "tools/call",
+        call("echo_say", json!({"text": "hi"})),
+    )
+    .await;
+    assert!(ada.await.unwrap(), "Ada's listener missed her own change");
+    assert!(!bob.await.unwrap(), "Bob heard a change in Ada's space");
+}

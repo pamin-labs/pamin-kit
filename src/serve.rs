@@ -22,8 +22,13 @@ use rmcp::model::{
     ListPromptsResult, ProgressNotificationParam, ProgressToken, PromptMessage, ProtocolVersion,
     UpdateTaskParams,
 };
-use rmcp::service::{RequestContext, RoleServer};
+use rmcp::model::{
+    ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ResourcesCapability,
+    ServerNotification, SubscriptionFilter,
+};
+use rmcp::service::{RequestContext, RoleServer, SubscriptionContext};
 use serde_json::Value;
+use tokio::sync::broadcast;
 use tracing::Instrument;
 
 use crate::kit::{CallError, Caller, Kit};
@@ -115,7 +120,10 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         let manifest = self.kit.manifest();
         let mut capabilities = ServerCapabilities::builder().enable_tools().build();
         if !self.kit.apps().is_empty() || self.kit.resources().next().is_some() {
-            capabilities.resources = Some(Default::default());
+            let mut resources = ResourcesCapability::default();
+            // Module resources can change; app pages cannot.
+            resources.subscribe = self.kit.resources().next().is_some().then_some(true);
+            capabilities.resources = Some(resources);
         }
         if self.kit.prompts().next().is_some() {
             capabilities.prompts = Some(Default::default());
@@ -145,6 +153,60 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult::with_all_items(self.tools.to_vec()))
+    }
+
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        // Only resources change: the lists of tools, prompts and resources
+        // are fixed when the kit is built.
+        self.kit.resources().next()?;
+        let mut accepted = SubscriptionFilter::default();
+        accepted.resource_subscriptions = requested.resource_subscriptions.clone();
+        Some(accepted)
+    }
+
+    async fn listen(&self, subscription: SubscriptionContext) -> Result<(), ErrorData> {
+        let request = subscription.request_context();
+        let space = self.kit.identify(bearer(request)).await.or_else(refusal)?;
+        let mut changes = self.kit.changes();
+        loop {
+            let changed = tokio::select! {
+                () = subscription.cancelled() => return Ok(()),
+                changed = changes.recv() => changed,
+            };
+            let changed = match changed {
+                Ok(changed) => changed,
+                // Fell behind: the changes skipped are lost to this listener,
+                // which rereads what it cares about on the next one.
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return Ok(()),
+            };
+            // Another space's change is not this listener's to see.
+            if changed.space != space {
+                continue;
+            }
+            let wanted = subscription
+                .sink()
+                .accepted()
+                .resource_subscriptions
+                .as_ref()
+                .is_some_and(|uris| uris.contains(&changed.uri));
+            if wanted {
+                let note = ResourceUpdatedNotification::new(ResourceUpdatedNotificationParam::new(
+                    changed.uri,
+                ));
+                if subscription
+                    .sink()
+                    .send(ServerNotification::ResourceUpdatedNotification(note))
+                    .await
+                    .is_err()
+                {
+                    return Ok(());
+                }
+            }
+        }
     }
 
     async fn list_resources(
