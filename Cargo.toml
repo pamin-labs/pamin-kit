@@ -15,10 +15,15 @@ exclude = ["/.agents", "/.claude", "/.github", "/.pamin-labs-dev.toml", "/AGENTS
 # Streamable HTTP for hosted use. Off by default, so a local module builds
 # no HTTP server.
 http = ["dep:axum", "dep:http", "dep:tokio", "rmcp/transport-streamable-http-server"]
+# The checks a module runs in CI: `pamin_kit::conformance!`. For a module's
+# dev-dependencies only.
+conformance = ["dep:insta", "dep:jsonschema"]
 
 [dependencies]
 axum = { version = "=0.8.9", default-features = false, features = ["tokio", "http1"], optional = true }
 http = { version = "=1.5.0", optional = true }
+insta = { version = "=1.49.0", features = ["json"], optional = true }
+jsonschema = { version = "=0.60.2", default-features = false, optional = true }
 rmcp = { version = "=3.8.0", default-features = false, features = ["server", "transport-io"] }
 schemars = "=1.2.3"
 serde = { version = "=1.0.229", features = ["derive"] }
@@ -32,3 +37,7 @@ tokio = { version = "=1.54.1", features = ["io-std", "io-util", "macros", "net",
 
 [profile.dev]
 debug = "line-tables-only"
+
+[[bench]]
+name = "call"
+harness = false
