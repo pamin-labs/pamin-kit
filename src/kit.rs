@@ -9,7 +9,6 @@ use std::time::{Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::module::{Manifest, Module};
@@ -18,7 +17,8 @@ use crate::ops::{
     Resource, Tool, with_input,
 };
 use crate::seams::{
-    Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage,
+    Change, ChangeFeed, Entitlements, Feature, Identity, InProcessChanges, Local, Metering, Open,
+    Space, Unmetered, Usage,
 };
 use crate::tasks::{InProcessTasks, StoredTask, TaskState, TaskStore};
 
@@ -39,8 +39,8 @@ struct Core<M> {
     ops: Ops<M>,
     /// Which resource a URI reads: an index into `ops.resources`.
     routes: matchit::Router<usize>,
-    /// Resource changes, for the clients listening in this process.
-    changes: broadcast::Sender<Changed>,
+    /// Resource changes, for the clients listening for them.
+    changes: Arc<dyn ChangeFeed>,
     /// Tasks running in this process, to stop when a caller cancels one.
     running: Mutex<HashMap<String, CancellationToken>>,
 }
@@ -90,7 +90,7 @@ impl<M: Module, I: Identity> Kit<M, I> {
                 module: Arc::new(module),
                 ops,
                 routes,
-                changes: broadcast::channel(CHANGES).0,
+                changes: Arc::new(InProcessChanges::default()),
                 running: Mutex::default(),
             },
             identity,
@@ -120,6 +120,13 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             metering,
             tasks: self.tasks,
         }
+    }
+
+    /// Carries resource changes through `changes` instead of within this
+    /// process, for listeners on other instances.
+    pub fn with_changes(mut self, changes: impl ChangeFeed) -> Self {
+        self.core.changes = Arc::new(changes);
+        self
     }
 
     pub fn with_tasks<S2: TaskStore>(self, tasks: S2) -> Kit<M, I, E, T, S2> {
@@ -534,7 +541,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
 
     /// Resource changes from now on, in every space: the listener keeps
     /// its own.
-    pub(crate) fn changes(&self) -> broadcast::Receiver<Changed> {
+    pub(crate) fn changes(&self) -> tokio::sync::broadcast::Receiver<Change> {
         self.core.changes.subscribe()
     }
 
@@ -612,7 +619,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         // Changes happened whether or not the call then failed. Nobody
         // listening is not an error.
         for uri in effects.updated {
-            let _ = self.core.changes.send(Changed {
+            self.core.changes.publish(Change {
                 space: space.clone(),
                 uri,
             });
@@ -684,16 +691,6 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
 pub struct Reply {
     pub value: Value,
     pub content: Vec<Content>,
-}
-
-/// How many changes a slow listener may fall behind before it skips some.
-const CHANGES: usize = 1024;
-
-/// A resource that changed, in the space whose call changed it.
-#[derive(Clone, Debug)]
-pub(crate) struct Changed {
-    pub space: Arc<Space>,
-    pub uri: String,
 }
 
 /// Why an operation returned no result.

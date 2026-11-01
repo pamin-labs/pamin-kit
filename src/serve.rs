@@ -28,7 +28,6 @@ use rmcp::model::{
 };
 use rmcp::service::{RequestContext, RoleServer, SubscriptionContext};
 use serde_json::Value;
-use tokio::sync::broadcast;
 use tracing::Instrument;
 
 use crate::kit::Reply;
@@ -249,8 +248,8 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
                 Ok(changed) => changed,
                 // Fell behind: the changes skipped are lost to this listener,
                 // which rereads what it cares about on the next one.
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),
             };
             // Another space's change is not this listener's to see.
             if changed.space != space {
