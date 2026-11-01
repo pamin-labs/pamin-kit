@@ -67,6 +67,16 @@ pub fn check<M: Module>(module: M, skill: &Path) -> Value {
             failures.push(format!("{name}: SKILL.md does not name it"));
         }
     }
+    // A long operation registered as a tool would hold the connection open
+    // and be lost on a reconnect; one registered as a task survives it.
+    let tasks = kit.tools().any(|tool| tool.long);
+    if kit.manifest().long_running != tasks {
+        failures.push(format!(
+            "the manifest says long_running: {}, but {} operation is registered with Ops::task",
+            kit.manifest().long_running,
+            if tasks { "an" } else { "no" }
+        ));
+    }
     assert!(
         failures.is_empty(),
         "conformance failed:\n{}",
