@@ -43,8 +43,9 @@ struct Core<M> {
 pub(crate) struct Caller<'a> {
     /// The request's bearer token: absent over stdio.
     pub bearer: Option<&'a str>,
-    /// Cancelled when the client cancels the request.
-    pub cancel: CancellationToken,
+    /// Cancelled when the client cancels the request; absent when nothing
+    /// can cancel it.
+    pub cancel: Option<CancellationToken>,
     /// Where progress goes, when the client asked for it.
     pub progress: Option<Arc<dyn Progress>>,
 }
@@ -249,7 +250,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             kit: self.clone(),
             id: task.id.clone(),
         });
-        let ctx = Ctx::new(space, cancel, Some(progress));
+        let ctx = Ctx::new(space, Some(cancel), Some(progress));
         let kit = self.clone();
         let started = task.clone();
         // The task's work stays in the span of the request that started it.

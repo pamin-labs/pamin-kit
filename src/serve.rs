@@ -289,7 +289,7 @@ fn contents(uri: &str, body: Body) -> ResourceContents {
 fn caller(context: &RequestContext<RoleServer>) -> Caller<'_> {
     Caller {
         bearer: bearer(context),
-        cancel: context.ct.clone(),
+        cancel: Some(context.ct.clone()),
         progress: context.meta.get_progress_token().map(|token| {
             Arc::new(PeerProgress {
                 peer: context.peer.clone(),

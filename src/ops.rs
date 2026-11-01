@@ -21,7 +21,9 @@ pub type JsonObject = Map<String, Value>;
 #[derive(Clone)]
 pub struct Ctx {
     space: Arc<Space>,
-    cancel: CancellationToken,
+    /// Absent when nothing can cancel the call, so a plain call allocates
+    /// no token.
+    cancel: Option<CancellationToken>,
     progress: Option<Arc<dyn Progress>>,
 }
 
@@ -39,7 +41,7 @@ pub(crate) trait Progress: Send + Sync {
 impl Ctx {
     pub(crate) fn new(
         space: Arc<Space>,
-        cancel: CancellationToken,
+        cancel: Option<CancellationToken>,
         progress: Option<Arc<dyn Progress>>,
     ) -> Self {
         Self {
@@ -64,13 +66,18 @@ impl Ctx {
     /// between steps and stops where its state is whole; the kit never
     /// stops it half way.
     pub fn is_cancelled(&self) -> bool {
-        self.cancel.is_cancelled()
+        self.cancel
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
     }
 
     /// Completes when the caller cancels the call, for an operation that
     /// waits on something it can abandon.
     pub async fn cancelled(&self) {
-        self.cancel.cancelled().await
+        match &self.cancel {
+            Some(cancel) => cancel.cancelled().await,
+            None => std::future::pending().await,
+        }
     }
 
     /// Tells the caller how far the operation is: `done` of `total`, if the
