@@ -79,8 +79,40 @@ impl Ctx {
     }
 }
 
-type Reply = Pin<Box<dyn Future<Output = Result<Value, String>> + Send>>;
-type Handler<M> = Box<dyn Fn(Arc<M>, Ctx, JsonObject) -> Reply + Send + Sync>;
+/// A registered handler with its types erased: it takes its arguments as
+/// JSON (an object, or null when it takes none) and returns `T` or an error
+/// a model reads.
+pub(crate) type Handler<M, T> = Box<
+    dyn Fn(Arc<M>, Ctx, Value) -> Pin<Box<dyn Future<Output = Result<T, String>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Erases `handler`'s types: parses its arguments as `A` and turns its
+/// result into `T` with `finish`. Shared by tools, resources and prompts.
+fn erase<M, A, R, E, F, Fut, T>(handler: F, finish: fn(R) -> Result<T, String>) -> Handler<M, T>
+where
+    M: Send + Sync + 'static,
+    A: DeserializeOwned,
+    R: 'static,
+    E: std::fmt::Display,
+    F: Fn(Arc<M>, Ctx, A) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<R, E>> + Send + 'static,
+    T: 'static,
+{
+    let handler = Arc::new(handler);
+    Box::new(move |module, ctx, arguments| {
+        let handler = handler.clone();
+        Box::pin(async move {
+            let arguments = serde_json::from_value(arguments)
+                .map_err(|error| format!("invalid arguments: {error}"))?;
+            let result = handler(module, ctx, arguments)
+                .await
+                .map_err(|error| error.to_string())?;
+            finish(result)
+        })
+    })
+}
 
 /// An operation as callers see it.
 #[derive(Clone, Debug)]
@@ -141,7 +173,7 @@ pub struct App {
 /// One registered operation.
 pub(crate) struct Op<M> {
     pub tool: Tool,
-    pub call: Handler<M>,
+    pub call: Handler<M, Value>,
 }
 
 /// The operations a module registers.
@@ -281,17 +313,8 @@ impl<M: Send + Sync + 'static> Ops<M> {
                 take_text(&mut output);
                 Arc::new(output)
             });
-        let handler = Arc::new(handler);
-        let call: Handler<M> = Box::new(move |module, ctx, arguments| {
-            let handler = handler.clone();
-            Box::pin(async move {
-                let arguments = serde_json::from_value(Value::Object(arguments))
-                    .map_err(|error| format!("invalid arguments: {error}"))?;
-                let result = handler(module, ctx, arguments)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                serde_json::to_value(result).map_err(|error| error.to_string())
-            })
+        let call = erase(handler, |result: R| {
+            serde_json::to_value(result).map_err(|error| error.to_string())
         });
         self.list.push(Op {
             tool: Tool {

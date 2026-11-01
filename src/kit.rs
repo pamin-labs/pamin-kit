@@ -146,7 +146,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     ) -> Result<Value, CallError> {
         let (index, space) = self.admit(name, caller.bearer).await?;
         let ctx = Ctx::new(space, caller.cancel, caller.progress);
-        self.run(index, ctx, arguments)
+        self.run(index, ctx, Value::Object(arguments))
             .await
             .map_err(CallError::Failed)
     }
@@ -184,7 +184,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         let started = task.clone();
         // The task's work stays in the span of the request that started it.
         tokio::spawn(tracing::Instrument::in_current_span(async move {
-            let state = match kit.run(index, ctx, arguments).await {
+            let state = match kit.run(index, ctx, Value::Object(arguments)).await {
                 Ok(result) => TaskState::Succeeded(result),
                 Err(message) => TaskState::Errored(message),
             };
@@ -279,7 +279,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     }
 
     /// Runs an admitted operation and meters it.
-    async fn run(&self, index: usize, ctx: Ctx, arguments: JsonObject) -> Result<Value, String> {
+    async fn run(&self, index: usize, ctx: Ctx, arguments: Value) -> Result<Value, String> {
         let op = &self.core.ops.list[index];
         let space = ctx.space().clone();
         let started = Instant::now();
