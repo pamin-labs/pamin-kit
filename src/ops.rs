@@ -112,15 +112,15 @@ where
     Fut: Future<Output = Result<R, E>> + Send + 'static,
     T: 'static,
 {
-    let handler = Arc::new(handler);
     Box::new(move |module, ctx, arguments| {
-        let handler = handler.clone();
+        // Parsed and started here, so the future owns only what it awaits
+        // and the handler is not shared with it: no reference count to bump
+        // on every call, which concurrent calls would contend on.
+        let started = serde_json::from_value(arguments)
+            .map(|arguments| handler(module, ctx, arguments))
+            .map_err(|error| format!("invalid arguments: {error}"));
         Box::pin(async move {
-            let arguments = serde_json::from_value(arguments)
-                .map_err(|error| format!("invalid arguments: {error}"))?;
-            let result = handler(module, ctx, arguments)
-                .await
-                .map_err(|error| error.to_string())?;
+            let result = started?.await.map_err(|error| error.to_string())?;
             finish(result)
         })
     })
