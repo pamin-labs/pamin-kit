@@ -5,10 +5,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+
 use rmcp::handler::server::common::schema_for_type;
+use rmcp::model::{ElicitResult, ElicitationAction};
 use schemars::JsonSchema;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
@@ -25,6 +29,68 @@ pub struct Ctx {
     /// no token.
     cancel: Option<CancellationToken>,
     progress: Option<Arc<dyn Progress>>,
+}
+
+/// One question an operation asks the user, as an MCP elicitation: a
+/// message and the form of the answer.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Ask {
+    /// Identifies the answer when the client sends it back.
+    pub key: String,
+    pub message: String,
+    /// The answer's JSON Schema: an object of primitive fields.
+    pub schema: JsonObject,
+}
+
+/// What [`Ctx::ask`] returns while the user has not answered yet: return it
+/// (with `?`) from the operation, and the kit asks the client, which calls
+/// the operation again with the answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NeedsInput;
+
+impl std::fmt::Display for NeedsInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the operation needs an answer from the user")
+    }
+}
+
+impl std::error::Error for NeedsInput {}
+
+impl From<NeedsInput> for String {
+    fn from(needs: NeedsInput) -> Self {
+        needs.to_string()
+    }
+}
+
+/// The answers a call brought and the questions it asked, for the one
+/// call running in this tokio task: kept task-local so that a call that
+/// asks nothing allocates nothing for it.
+pub(crate) struct Input {
+    answers: Option<BTreeMap<String, Value>>,
+    asked: Vec<Ask>,
+}
+
+tokio::task_local! {
+    static INPUT: RefCell<Input>;
+}
+
+/// Runs `work` with `answers` available to [`Ctx::ask`], and returns what
+/// it asked besides its output.
+pub(crate) async fn with_input<F: Future>(
+    answers: Option<BTreeMap<String, Value>>,
+    work: F,
+) -> (F::Output, Vec<Ask>) {
+    let input = RefCell::new(Input {
+        answers,
+        asked: Vec::new(),
+    });
+    INPUT
+        .scope(input, async {
+            let output = work.await;
+            let asked = INPUT.with(|input| std::mem::take(&mut input.borrow_mut().asked));
+            (output, asked)
+        })
+        .await
 }
 
 /// Where an operation's progress goes: a progress notification to the
@@ -78,6 +144,47 @@ impl Ctx {
             Some(cancel) => cancel.cancelled().await,
             None => std::future::pending().await,
         }
+    }
+
+    /// Asks the user a question, identified by `key`, whose answer has the
+    /// form of `T` (a struct of primitive fields, whose doc comments label
+    /// the form). Returns the answer once the user gave it, `None` when they
+    /// declined, and [`NeedsInput`] the first time: return that from the
+    /// operation, which runs again, from the start, with the answer. Ask
+    /// from the operation's own task, not from one it spawns.
+    pub fn ask<T: DeserializeOwned + JsonSchema + 'static>(
+        &self,
+        key: &str,
+        message: &str,
+    ) -> Result<Option<T>, NeedsInput> {
+        let answer = INPUT.try_with(|input| {
+            let mut input = input.borrow_mut();
+            let given = input.answers.as_ref().and_then(|answers| answers.get(key));
+            let decided = given
+                .and_then(|given| serde_json::from_value::<ElicitResult>(given.clone()).ok())
+                .and_then(|result| match result.action {
+                    ElicitationAction::Accept => result
+                        .content
+                        .and_then(|content| serde_json::from_value(content).ok())
+                        .map(Some),
+                    _ => Some(None),
+                });
+            match decided {
+                Some(answer) => Ok(answer),
+                // Not answered yet, or answered in a form that does not
+                // parse: ask.
+                None => {
+                    input.asked.push(Ask {
+                        key: key.to_owned(),
+                        message: message.to_owned(),
+                        schema: JsonObject::clone(&schema_for_type::<T>()),
+                    });
+                    Err(NeedsInput)
+                }
+            }
+        });
+        // Outside a kit call there is nobody to ask.
+        answer.unwrap_or(Err(NeedsInput))
     }
 
     /// Tells the caller how far the operation is: `done` of `total`, if the

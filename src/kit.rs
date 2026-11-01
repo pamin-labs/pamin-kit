@@ -1,7 +1,7 @@
 //! A module with its seams: the one place every call is identified, checked,
 //! run and metered, whatever transport it arrived on.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -12,7 +12,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::module::{Manifest, Module};
 use crate::ops::{
-    APP_MIME, App, Body, Ctx, JsonObject, Message, Ops, Progress, Prompt, Resource, Tool,
+    APP_MIME, App, Ask, Body, Ctx, JsonObject, Message, Ops, Progress, Prompt, Resource, Tool,
+    with_input,
 };
 use crate::seams::{
     Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage,
@@ -50,6 +51,8 @@ pub(crate) struct Caller<'a> {
     pub cancel: Option<CancellationToken>,
     /// Where progress goes, when the client asked for it.
     pub progress: Option<Arc<dyn Progress>>,
+    /// The user's answers to what an earlier round of this call asked.
+    pub answers: Option<BTreeMap<String, Value>>,
 }
 
 impl<M: Module, I: Identity> Kit<M, I> {
@@ -181,11 +184,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
                 .into()
         };
         let ctx = Ctx::new(space, caller.cancel, caller.progress);
-        self.metered(template, feature, ctx, |ctx| {
+        self.metered(template, feature, ctx, caller.answers, |ctx| {
             (readable.read)(self.core.module.clone(), ctx, variables)
         })
         .await
-        .map_err(CallError::Failed)
+        .map_err(CallError::from)
     }
 
     /// Whether the module completes any argument.
@@ -230,11 +233,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         let Prompt { name, feature, .. } = promptable.prompt;
         self.entitled(&space, feature)?;
         let ctx = Ctx::new(space, caller.cancel, caller.progress);
-        self.metered(name, feature, ctx, |ctx| {
+        self.metered(name, feature, ctx, caller.answers, |ctx| {
             (promptable.get)(self.core.module.clone(), ctx, Value::Object(arguments))
         })
         .await
-        .map_err(CallError::Failed)
+        .map_err(CallError::from)
     }
 
     /// Suggestions for `argument` of `target` (a prompt or a resource
@@ -269,11 +272,11 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             .expect("Ops::complete checked the target");
         self.entitled(&space, feature)?;
         let ctx = Ctx::new(space, caller.cancel, caller.progress);
-        self.metered(completer.target, feature, ctx, |ctx| {
+        self.metered(completer.target, feature, ctx, caller.answers, |ctx| {
             (completer.complete)(self.core.module.clone(), ctx, Value::String(typed))
         })
         .await
-        .map_err(CallError::Failed)
+        .map_err(CallError::from)
     }
 
     /// The registered operation `name`.
@@ -305,9 +308,9 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     ) -> Result<Value, CallError> {
         let (index, space) = self.admit(name, caller.bearer).await?;
         let ctx = Ctx::new(space, caller.cancel, caller.progress);
-        self.run(index, ctx, Value::Object(arguments))
+        self.run(index, ctx, Value::Object(arguments), caller.answers)
             .await
-            .map_err(CallError::Failed)
+            .map_err(CallError::from)
     }
 
     /// Starts operation `name` as a task for the caller holding `bearer`, and
@@ -320,39 +323,102 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     ) -> Result<StoredTask, CallError> {
         let (index, space) = self.admit(name, bearer).await?;
         let now = SystemTime::now();
+        let arguments = Value::Object(arguments);
         let task = StoredTask {
             id: uuid::Uuid::new_v4().to_string(),
             space: Space::clone(&space),
             operation: self.core.ops.list[index].tool.name.to_owned(),
+            arguments: arguments.clone(),
             state: TaskState::Working,
             status: None,
             created_at: now,
             updated_at: now,
+            version: 0,
         };
-        self.tasks.put(task.clone()).await.map_err(unavailable)?;
+        // A fresh id: no other writer can hold it.
+        self.tasks
+            .put(task.clone(), None)
+            .await
+            .map_err(unavailable)?;
+        self.launch(index, space, task.id.clone(), arguments, None);
+        Ok(task)
+    }
+
+    /// Gives a task that asked for input the user's `answers` and runs its
+    /// operation again with them. A task not waiting for input is left as
+    /// it is, as are answers to questions it did not ask.
+    pub async fn update(
+        self: &Arc<Self>,
+        bearer: Option<&str>,
+        id: &str,
+        answers: BTreeMap<String, Value>,
+    ) -> Result<StoredTask, CallError> {
+        self.task(bearer, id).await?;
+        let (task, resumed) = self
+            .transition(id, |task| {
+                matches!(task.state, TaskState::InputRequired(_)).then(|| StoredTask {
+                    state: TaskState::Working,
+                    status: None,
+                    ..task.clone()
+                })
+            })
+            .await
+            .map_err(unavailable)?
+            .ok_or_else(|| CallError::NoTask(id.to_owned()))?;
+        // Only the writer that resumed it runs it again, however many
+        // updates race.
+        if resumed {
+            let index = self
+                .core
+                .ops
+                .list
+                .iter()
+                .position(|op| op.tool.name == task.operation)
+                .ok_or_else(|| CallError::Unknown(task.operation.clone()))?;
+            let space = Arc::new(task.space.clone());
+            self.launch(
+                index,
+                space,
+                task.id.clone(),
+                task.arguments.clone(),
+                Some(answers),
+            );
+        }
+        Ok(task)
+    }
+
+    /// Runs operation `index` for task `id` in the background and stores
+    /// how it ended: a result, an error, or questions for the user.
+    fn launch(
+        self: &Arc<Self>,
+        index: usize,
+        space: Arc<Space>,
+        id: String,
+        arguments: Value,
+        answers: Option<BTreeMap<String, Value>>,
+    ) {
         // The request that started the task ends now, so the task gets a
         // token of its own, which cancelling the task triggers.
         let cancel = CancellationToken::new();
-        self.running().insert(task.id.clone(), cancel.clone());
+        self.running().insert(id.clone(), cancel.clone());
         let progress = Arc::new(TaskProgress {
             kit: self.clone(),
-            id: task.id.clone(),
+            id: id.clone(),
         });
         let ctx = Ctx::new(space, Some(cancel), Some(progress));
         let kit = self.clone();
-        let started = task.clone();
         // The task's work stays in the span of the request that started it.
         tokio::spawn(tracing::Instrument::in_current_span(async move {
-            let state = match kit.run(index, ctx, Value::Object(arguments)).await {
+            let state = match kit.run(index, ctx, arguments, answers).await {
                 Ok(result) => TaskState::Succeeded(result),
-                Err(message) => TaskState::Errored(message),
+                Err(Halt::Failed(message)) => TaskState::Errored(message),
+                Err(Halt::Input(asked)) => TaskState::InputRequired(asked),
             };
-            kit.running().remove(&started.id);
-            if let Err(error) = kit.finish(started, state).await {
+            kit.running().remove(&id);
+            if let Err(error) = kit.finish(&id, state).await {
                 tracing::error!(%error, "a finished task could not be stored");
             }
         }));
-        Ok(task)
     }
 
     /// The caller's task `id`.
@@ -371,31 +437,26 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     /// its state is whole, and its result is discarded; the kit never stops
     /// it between two awaits.
     pub async fn cancel(&self, bearer: Option<&str>, id: &str) -> Result<StoredTask, CallError> {
-        let task = self.task(bearer, id).await?;
-        if task.state.is_terminal() {
-            return Ok(task);
-        }
+        self.task(bearer, id).await?;
         if let Some(cancel) = self.running().get(id) {
             cancel.cancel();
         }
-        self.finish(task, TaskState::Cancelled)
+        self.finish(id, TaskState::Cancelled)
             .await
-            .map_err(unavailable)
+            .map_err(unavailable)?
+            .ok_or_else(|| CallError::NoTask(id.to_owned()))
     }
 
     /// Sets a running task's status message, which pollers see.
     async fn status(&self, id: &str, status: String) -> std::io::Result<()> {
-        match self.tasks.get(id).await? {
-            Some(task) if !task.state.is_terminal() => {
-                let task = StoredTask {
-                    status: Some(status),
-                    updated_at: SystemTime::now(),
-                    ..task
-                };
-                self.tasks.put(task).await
-            }
-            _ => Ok(()),
-        }
+        self.transition(id, |task| {
+            (!task.state.is_terminal()).then(|| StoredTask {
+                status: Some(status.clone()),
+                ..task.clone()
+            })
+        })
+        .await
+        .map(drop)
     }
 
     fn running(&self) -> std::sync::MutexGuard<'_, HashMap<String, CancellationToken>> {
@@ -445,9 +506,15 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     }
 
     /// Runs an admitted operation and meters it.
-    async fn run(&self, index: usize, ctx: Ctx, arguments: Value) -> Result<Value, String> {
+    async fn run(
+        &self,
+        index: usize,
+        ctx: Ctx,
+        arguments: Value,
+        answers: Option<BTreeMap<String, Value>>,
+    ) -> Result<Value, Halt> {
         let op = &self.core.ops.list[index];
-        self.metered(op.tool.name, op.tool.feature, ctx, |ctx| {
+        self.metered(op.tool.name, op.tool.feature, ctx, answers, |ctx| {
             (op.call)(self.core.module.clone(), ctx, arguments)
         })
         .await
@@ -460,14 +527,21 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         operation: &'static str,
         feature: Feature,
         ctx: Ctx,
+        answers: Option<BTreeMap<String, Value>>,
         work: impl FnOnce(Ctx) -> Fut,
-    ) -> Result<V, String>
+    ) -> Result<V, Halt>
     where
         Fut: Future<Output = Result<V, String>>,
     {
         let space = ctx.shared_space();
         let started = Instant::now();
-        let result = work(ctx).await;
+        let (result, asked) = with_input(answers, work(ctx)).await;
+        let result = match result {
+            Ok(value) => Ok(value),
+            // It stopped to ask the user: not a failure, a question.
+            Err(_) if !asked.is_empty() => Err(Halt::Input(asked)),
+            Err(message) => Err(Halt::Failed(message)),
+        };
         self.metering.record(
             &space,
             Usage {
@@ -480,20 +554,63 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         result
     }
 
-    /// Stores `task` in its final `state`, unless it was cancelled meanwhile.
-    async fn finish(&self, task: StoredTask, state: TaskState) -> std::io::Result<StoredTask> {
-        if let Some(now) = self.tasks.get(&task.id).await?
-            && now.state.is_terminal()
-        {
-            return Ok(now);
+    /// Puts task `id` in `state`, unless it already has a final one: the
+    /// first of finishing and cancelling wins. Returns the task as stored,
+    /// or `None` when no task `id` is kept.
+    async fn finish(&self, id: &str, state: TaskState) -> std::io::Result<Option<StoredTask>> {
+        let changed = self
+            .transition(id, |task| {
+                (!task.state.is_terminal()).then(|| StoredTask {
+                    state: state.clone(),
+                    ..task.clone()
+                })
+            })
+            .await?;
+        Ok(changed.map(|(task, _)| task))
+    }
+
+    /// Changes task `id` with `change`, atomically against every other
+    /// writer: reads it, asks `change` for the next state (`None`: leave it
+    /// as it is), and writes that only if nobody wrote in between, reading
+    /// again if somebody did. The one way the kit changes a task. Returns
+    /// the task as stored and whether this call changed it.
+    async fn transition(
+        &self,
+        id: &str,
+        change: impl Fn(&StoredTask) -> Option<StoredTask>,
+    ) -> std::io::Result<Option<(StoredTask, bool)>> {
+        loop {
+            let Some(current) = self.tasks.get(id).await? else {
+                return Ok(None);
+            };
+            let Some(next) = change(&current) else {
+                return Ok(Some((current, false)));
+            };
+            let next = StoredTask {
+                version: current.version + 1,
+                updated_at: SystemTime::now(),
+                ..next
+            };
+            if self.tasks.put(next.clone(), Some(current.version)).await? {
+                return Ok(Some((next, true)));
+            }
         }
-        let task = StoredTask {
-            state,
-            updated_at: SystemTime::now(),
-            ..task
-        };
-        self.tasks.put(task.clone()).await?;
-        Ok(task)
+    }
+}
+
+/// Why an operation returned no result.
+pub(crate) enum Halt {
+    Failed(String),
+    /// It asked the user these questions.
+    Input(Vec<Ask>),
+}
+
+impl From<Halt> for CallError {
+    fn from(halt: Halt) -> Self {
+        match halt {
+            Halt::Failed(message) => Self::Failed(message),
+            Halt::Input(asked) => Self::InputRequired(asked),
+        }
     }
 }
 
@@ -531,7 +648,7 @@ fn unavailable(error: std::io::Error) -> CallError {
 }
 
 /// Why a call returned no result.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum CallError {
     /// The identity seam refused the caller.
     Unidentified,
@@ -540,6 +657,9 @@ pub enum CallError {
     /// The arguments did not parse, or the operation failed; the message says
     /// which.
     Failed(String),
+    /// The operation asked the user these questions; the client answers
+    /// and calls again.
+    InputRequired(Vec<Ask>),
     /// No task with this id is kept for the caller.
     NoTask(String),
     /// The task store failed.
@@ -559,6 +679,9 @@ impl std::fmt::Display for CallError {
                 )
             }
             Self::Failed(message) => f.write_str(message),
+            Self::InputRequired(asked) => {
+                write!(f, "the operation asks the user {} question(s)", asked.len())
+            }
             Self::NoTask(id) => write!(f, "no task {id} is kept for this caller"),
             Self::Unavailable(message) => write!(f, "task store unavailable: {message}"),
         }

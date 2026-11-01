@@ -16,9 +16,11 @@ use rmcp::model::{
     TaskPayload, TaskStatus, ToolAnnotations,
 };
 use rmcp::model::{
-    CompleteRequestParams, CompleteResult, CompletionInfo, GetPromptRequestParams,
-    GetPromptResponse, GetPromptResult, ListPromptsResult, ProgressNotificationParam,
-    ProgressToken, PromptMessage,
+    ClientCapabilities, CompleteRequestParams, CompleteResult, CompletionInfo, ElicitRequest,
+    ElicitRequestParams, ElicitationSchema, GetPromptRequestParams, GetPromptResponse,
+    GetPromptResult, InputRequest, InputRequests, InputRequiredResult, InputResponses,
+    ListPromptsResult, ProgressNotificationParam, ProgressToken, PromptMessage, ProtocolVersion,
+    UpdateTaskParams,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::Value;
@@ -26,7 +28,7 @@ use tracing::Instrument;
 
 use crate::kit::{CallError, Caller, Kit};
 use crate::module::Module;
-use crate::ops::{APP_MIME, Body, Hints, Progress, Role};
+use crate::ops::{APP_MIME, Ask, Body, Hints, Progress, Role};
 use crate::seams::{Entitlements, Identity, Metering};
 use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
 use crate::trace;
@@ -192,16 +194,17 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         let span = trace::request("resources/read", &request.uri, &context);
-        let result = self
-            .kit
-            .read_as(&request.uri, caller(&context))
-            .instrument(span.clone())
-            .await
-            .map(|body| ReadResourceResult::new(vec![contents(&request.uri, body)]).into())
-            .or_else(|error| match error {
-                CallError::Unknown(uri) => Err(ErrorData::resource_not_found(uri, None)),
-                error => refusal(error),
-            });
+        let result = answered(&context, request.input_responses, |answers| {
+            self.kit.read_as(&request.uri, caller(&context, answers))
+        })
+        .instrument(span.clone())
+        .await;
+        let result = match result {
+            Err(CallError::Unknown(uri)) => Err(ErrorData::resource_not_found(uri, None)),
+            result => respond(result, |body| {
+                ReadResourceResult::new(vec![contents(&request.uri, body)])
+            }),
+        };
         trace::outcome(&span, &result);
         result
     }
@@ -236,25 +239,25 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
     ) -> Result<GetPromptResponse, ErrorData> {
         let span = trace::request("prompts/get", &request.name, &context);
         let arguments = request.arguments.unwrap_or_default();
-        let result = self
-            .kit
-            .prompt_as(&request.name, caller(&context), arguments)
-            .instrument(span.clone())
-            .await
-            .map(|messages| {
-                let messages = messages
-                    .into_iter()
-                    .map(|message| {
-                        let role = match message.role {
-                            Role::User => rmcp::model::Role::User,
-                            Role::Assistant => rmcp::model::Role::Assistant,
-                        };
-                        PromptMessage::new_text(role, message.text)
-                    })
-                    .collect();
-                GetPromptResult::new(messages).into()
-            })
-            .or_else(refusal);
+        let result = answered(&context, request.input_responses, |answers| {
+            self.kit
+                .prompt_as(&request.name, caller(&context, answers), arguments.clone())
+        })
+        .instrument(span.clone())
+        .await;
+        let result = respond(result, |messages| {
+            let messages = messages
+                .into_iter()
+                .map(|message| {
+                    let role = match message.role {
+                        Role::User => rmcp::model::Role::User,
+                        Role::Assistant => rmcp::model::Role::Assistant,
+                    };
+                    PromptMessage::new_text(role, message.text)
+                })
+                .collect();
+            GetPromptResult::new(messages)
+        });
         trace::outcome(&span, &result);
         result
     }
@@ -279,7 +282,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
                 target,
                 &request.argument.name,
                 request.argument.value.clone(),
-                caller(&context),
+                caller(&context, None),
             )
             .instrument(span.clone())
             .await
@@ -312,6 +315,23 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
             .instrument(span.clone())
             .await
             .map(|task| GetTaskResult::new(detailed(task)))
+            .or_else(refusal);
+        trace::outcome(&span, &result);
+        result
+    }
+
+    async fn update_task(
+        &self,
+        request: UpdateTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        let span = trace::request("tasks/update", &request.task_id, &context);
+        let result = self
+            .kit
+            .update(bearer(&context), &request.task_id, request.input_responses)
+            .instrument(span.clone())
+            .await
+            .map(drop)
             .or_else(refusal);
         trace::outcome(&span, &result);
         result
@@ -352,18 +372,60 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<
                 .or_else(refusal)?;
             return Ok(CallToolResponse::Task(CreateTaskResult::new(listed(&task))));
         }
-        match self
-            .kit
-            .call_as(&request.name, caller(&context), arguments)
-            .await
-        {
-            Ok(value) => Ok(CallToolResult::structured(value).into()),
+        let result = answered(&context, request.input_responses, |answers| {
+            self.kit
+                .call_as(&request.name, caller(&context, answers), arguments.clone())
+        })
+        .await;
+        match result {
             Err(error @ (CallError::NotEntitled(_) | CallError::Failed(_))) => {
                 Ok(tool_error(error).into())
             }
-            Err(error) => refusal(error),
+            result => respond(result, CallToolResult::structured),
         }
     }
+}
+
+/// A kit result as the MCP response `R`: the result, the questions the
+/// operation asks the user (MRTR), or a refusal.
+fn respond<V, D, R>(result: Result<V, CallError>, done: impl FnOnce(V) -> D) -> Result<R, ErrorData>
+where
+    D: Into<R>,
+    R: From<InputRequiredResult>,
+{
+    match result {
+        Ok(value) => Ok(done(value).into()),
+        Err(CallError::InputRequired(asked)) => Ok(questions(asked)?.into()),
+        Err(error) => refusal(error),
+    }
+}
+
+/// What an operation asks the user, as MCP elicitation requests.
+fn questions(asked: Vec<Ask>) -> Result<InputRequiredResult, ErrorData> {
+    let requests = asked
+        .into_iter()
+        .map(|ask| {
+            let (key, form) = form(ask)?;
+            Ok((key, InputRequest::Elicitation(ElicitRequest::new(form))))
+        })
+        .collect::<Result<InputRequests, ErrorData>>()?;
+    Ok(InputRequiredResult::from_input_requests(requests))
+}
+
+/// One question as an elicitation form, with the key its answer comes back
+/// under.
+fn form(ask: Ask) -> Result<(String, ElicitRequestParams), ErrorData> {
+    let schema = ElicitationSchema::from_json_schema(ask.schema).map_err(|error| {
+        // The module asked with a type an elicitation form cannot show: a
+        // mistake in the module.
+        ErrorData::internal_error(format!("cannot ask {}: {error}", ask.key), None)
+    })?;
+    let form = ElicitRequestParams::FormElicitationParams {
+        meta: None,
+        message: ask.message,
+        requested_schema: schema,
+    };
+    Ok((ask.key, form))
 }
 
 /// Suggestions as MCP completion, cut to the most MCP allows with the rest
@@ -392,8 +454,9 @@ fn contents(uri: &str, body: Body) -> ResourceContents {
 }
 
 /// What the transport knows about a request, for the kit.
-fn caller(context: &RequestContext<RoleServer>) -> Caller<'_> {
+fn caller(context: &RequestContext<RoleServer>, answers: Option<InputResponses>) -> Caller<'_> {
     Caller {
+        answers,
         bearer: bearer(context),
         cancel: Some(context.ct.clone()),
         progress: context.meta.get_progress_token().map(|token| {
@@ -448,21 +511,68 @@ fn refusal<V>(error: CallError) -> Result<V, ErrorData> {
 /// Whether this request's client declared the tasks extension: per request
 /// over stateless HTTP, at initialization over stdio.
 fn supports_tasks(context: &RequestContext<RoleServer>) -> bool {
-    context
-        .meta
-        .client_capabilities()
-        .or_else(|| {
-            context
+    capabilities(context).is_some_and(|capabilities| capabilities.supports_tasks())
+}
+
+/// What the client declared it can do: per request over stateless HTTP, at
+/// initialization over stdio.
+fn capabilities(context: &RequestContext<RoleServer>) -> Option<ClientCapabilities> {
+    context.meta.client_capabilities().or_else(|| {
+        context
+            .peer
+            .peer_info()
+            .map(|info| info.capabilities.clone())
+    })
+}
+
+/// The most rounds of questions one request may take, as rmcp's client
+/// allows.
+const MAX_ROUNDS: usize = 10;
+
+/// Runs `attempt` with `answers`, and when the operation asks the user and
+/// the client speaks a protocol before MRTR (2026-07-28), asks the client
+/// itself (`elicitation/create`) and runs it again with the answers. A newer
+/// client gets the questions back as MRTR and calls again on its own; a
+/// client that cannot ask at all gets the questions as a refusal.
+async fn answered<V, Fut>(
+    context: &RequestContext<RoleServer>,
+    mut answers: Option<InputResponses>,
+    attempt: impl Fn(Option<InputResponses>) -> Fut,
+) -> Result<V, CallError>
+where
+    Fut: Future<Output = Result<V, CallError>>,
+{
+    let mrtr = context
+        .protocol_version()
+        .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
+    let can_ask = capabilities(context).is_some_and(|c| c.elicitation.is_some());
+    for _ in 0..MAX_ROUNDS {
+        let asked = match attempt(answers.clone()).await {
+            Err(CallError::InputRequired(asked)) if !mrtr && can_ask => asked,
+            result => return result,
+        };
+        let given = answers.get_or_insert_with(InputResponses::new);
+        for ask in asked {
+            let (key, form) = form(ask).map_err(|error| CallError::Failed(error.message.into()))?;
+            let answer = context
                 .peer
-                .peer_info()
-                .map(|info| info.capabilities.clone())
-        })
-        .is_some_and(|capabilities| capabilities.supports_tasks())
+                .create_elicitation(form)
+                .await
+                .map_err(|error| CallError::Failed(format!("asking the user failed: {error}")))?;
+            let answer = serde_json::to_value(answer)
+                .map_err(|error| CallError::Failed(error.to_string()))?;
+            given.insert(key, answer);
+        }
+    }
+    Err(CallError::Failed(format!(
+        "the operation asked the user more than {MAX_ROUNDS} rounds of questions"
+    )))
 }
 
 fn listed(task: &StoredTask) -> Task {
     let status = match task.state {
         TaskState::Working => TaskStatus::Working,
+        TaskState::InputRequired(_) => TaskStatus::InputRequired,
         TaskState::Succeeded(_) | TaskState::Errored(_) => TaskStatus::Completed,
         TaskState::Cancelled => TaskStatus::Cancelled,
     };
@@ -480,6 +590,22 @@ fn detailed(task: StoredTask) -> DetailedTask {
     let result = match task.state {
         TaskState::Working => return DetailedTask::new(listed, TaskPayload::Working),
         TaskState::Cancelled => return DetailedTask::new(listed, TaskPayload::Cancelled),
+        TaskState::InputRequired(asked) => {
+            let payload = match questions(asked) {
+                Ok(result) => TaskPayload::InputRequired {
+                    input_requests: result.input_requests.unwrap_or_default(),
+                },
+                // The module asked with a form MCP cannot show: the task
+                // cannot go on, and the poller is told why.
+                Err(error) => {
+                    let Ok(Value::Object(error)) = serde_json::to_value(error) else {
+                        unreachable!("an error serializes to an object")
+                    };
+                    TaskPayload::Failed { error }
+                }
+            };
+            return DetailedTask::new(listed, payload);
+        }
         TaskState::Succeeded(value) => CallToolResult::structured(value),
         // An operation's error is a completed call whose result is an error,
         // as MCP has it; `failed` is for protocol errors, and there are none.
