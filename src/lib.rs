@@ -12,6 +12,8 @@ mod module;
 mod ops;
 mod seams;
 mod serve;
+#[cfg(feature = "http")]
+pub use serve::{HttpOptions, ProtectedResource};
 mod tasks;
 mod trace;
 
