@@ -31,9 +31,10 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use tracing::Instrument;
 
+use crate::kit::Reply;
 use crate::kit::{CallError, Caller, Kit};
 use crate::module::Module;
-use crate::ops::{APP_MIME, Ask, Body, Hints, Progress, Role};
+use crate::ops::{APP_MIME, Ask, Body, Content, Hints, Progress, Role};
 use crate::seams::{Entitlements, Identity, Metering, Space};
 use crate::tasks::{StoredTask, TASK_TTL, TaskState, TaskStore};
 use crate::trace;
@@ -319,7 +320,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
                         Role::User => rmcp::model::Role::User,
                         Role::Assistant => rmcp::model::Role::Assistant,
                     };
-                    PromptMessage::new_text(role, message.text)
+                    PromptMessage::new(role, block(message.content))
                 })
                 .collect();
             GetPromptResult::new(messages)
@@ -450,7 +451,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<
             Err(error @ (CallError::NotEntitled(_) | CallError::Failed(_))) => {
                 Ok(tool_error(error).into())
             }
-            result => respond(result, CallToolResult::structured),
+            result => respond(result, replied),
         }
     }
 }
@@ -508,6 +509,34 @@ fn completion(mut values: Vec<String>) -> CompleteResult {
         info.has_more = Some(true);
     }
     CompleteResult::new(info)
+}
+
+/// A tool's reply as an MCP tool result: the structured result (with its
+/// JSON as text, for clients that read only content), then the content the
+/// operation attached.
+fn replied(reply: Reply) -> CallToolResult {
+    let mut result = CallToolResult::structured(reply.value);
+    result.content.extend(reply.content.into_iter().map(block));
+    result
+}
+
+/// Kit content as an MCP content block.
+fn block(content: Content) -> ContentBlock {
+    use base64::Engine;
+    let encode = |data: Vec<u8>| base64::engine::general_purpose::STANDARD.encode(data);
+    match content {
+        Content::Text(text) => ContentBlock::text(text),
+        Content::Image { mime, data } => ContentBlock::image(encode(data), mime),
+        Content::Audio { mime, data } => ContentBlock::audio(encode(data), mime),
+        Content::Link { uri, name, mime } => {
+            let link = Resource::new(uri, name);
+            ContentBlock::resource_link(match mime {
+                Some(mime) => link.with_mime_type(mime),
+                None => link,
+            })
+        }
+        Content::Resource { uri, body } => ContentBlock::resource(contents(&uri, body)),
+    }
 }
 
 /// A resource's body as MCP resource contents.
@@ -676,7 +705,7 @@ fn detailed(task: StoredTask) -> DetailedTask {
             };
             return DetailedTask::new(listed, payload);
         }
-        TaskState::Succeeded(value) => CallToolResult::structured(value),
+        TaskState::Succeeded(reply) => replied(reply),
         // An operation's error is a completed call whose result is an error,
         // as MCP has it; `failed` is for protocol errors, and there are none.
         TaskState::Errored(message) => CallToolResult::error(vec![ContentBlock::text(message)]),

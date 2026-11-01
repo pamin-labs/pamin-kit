@@ -42,7 +42,11 @@ async fn calls_are_identified_checked_run_and_metered() {
         .call("echo_say", None, args(json!({"text": "hi"})))
         .await
         .unwrap();
-    assert_eq!(said, json!({"text": "hi", "project": "notes"}));
+    assert_eq!(said.value, json!({"text": "hi", "project": "notes"}));
+    assert!(matches!(
+        &said.content[..],
+        [pamin_kit::Content::Link { uri, .. }] if uri == "echo://say/hi"
+    ));
 
     let failed = kit.call("echo_say", None, args(json!({"text": ""}))).await;
     assert_eq!(failed, Err(CallError::Failed("nothing to say".into())));
@@ -204,5 +208,8 @@ async fn a_task_waits_for_the_users_answer_and_goes_on() {
         }
         tokio::task::yield_now().await;
     };
-    assert_eq!(done.state, pamin_kit::TaskState::Succeeded(json!("hello")));
+    let pamin_kit::TaskState::Succeeded(reply) = done.state else {
+        panic!("{:?}", done.state);
+    };
+    assert_eq!(reply.value, json!("hello"));
 }

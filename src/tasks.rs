@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::kit::Reply;
 use crate::ops::Ask;
 use crate::seams::Space;
 
@@ -52,7 +53,7 @@ pub enum TaskState {
     /// Waiting for the user's answers to these questions (`tasks/update`).
     InputRequired(Vec<Ask>),
     /// The operation's result.
-    Succeeded(Value),
+    Succeeded(Reply),
     /// The operation's error message, which the model reads.
     Errored(String),
     Cancelled,
