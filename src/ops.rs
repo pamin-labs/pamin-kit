@@ -206,6 +206,56 @@ pub(crate) struct Readable<M> {
     pub read: Handler<M, Body>,
 }
 
+/// A prompt a module offers: messages a user picks to start a conversation
+/// with, filled from arguments.
+#[derive(Clone, Debug)]
+pub struct Prompt {
+    pub name: &'static str,
+    pub feature: Feature,
+    /// The arguments type's doc comment.
+    pub description: Option<String>,
+    pub arguments: Vec<PromptArgument>,
+    /// The arguments' JSON Schema, for conformance: MCP prompt arguments
+    /// are strings.
+    pub schema: Arc<JsonObject>,
+}
+
+/// One argument of a prompt, from a field of its arguments type.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PromptArgument {
+    pub name: String,
+    pub description: Option<String>,
+    pub required: bool,
+}
+
+/// Who says a prompt message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    User,
+    Assistant,
+}
+
+/// One message of a prompt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Message {
+    pub role: Role,
+    pub text: String,
+}
+
+/// One registered prompt.
+pub(crate) struct Promptable<M> {
+    pub prompt: Prompt,
+    pub get: Handler<M, Vec<Message>>,
+}
+
+/// Completes one argument of a prompt or variable of a resource template.
+pub(crate) struct Completer<M> {
+    /// A prompt's name or a resource template's URI.
+    pub target: &'static str,
+    pub argument: &'static str,
+    pub complete: Handler<M, Vec<String>>,
+}
+
 /// The MIME type MCP Apps hosts render.
 pub(crate) const APP_MIME: &str = "text/html;profile=mcp-app";
 
@@ -226,6 +276,8 @@ pub(crate) struct Op<M> {
 pub struct Ops<M> {
     pub(crate) list: Vec<Op<M>>,
     pub(crate) resources: Vec<Readable<M>>,
+    pub(crate) prompts: Vec<Promptable<M>>,
+    pub(crate) completers: Vec<Completer<M>>,
     pub(crate) apps: Vec<App>,
     pub(crate) instructions: Option<&'static str>,
 }
@@ -235,6 +287,8 @@ impl<M: Send + Sync + 'static> Ops<M> {
         Self {
             list: Vec::new(),
             resources: Vec::new(),
+            prompts: Vec::new(),
+            completers: Vec::new(),
             apps: Vec::new(),
             instructions: None,
         }
@@ -343,6 +397,78 @@ impl<M: Send + Sync + 'static> Ops<M> {
         self
     }
 
+    /// Registers a prompt `name`, available to spaces entitled to `feature`.
+    /// Its arguments are the fields of `A`, which MCP passes as strings, and
+    /// `A`'s doc comment describes it.
+    ///
+    /// # Panics
+    ///
+    /// When `name` is registered twice or `A` is not a struct.
+    pub fn prompt<A, E, F, Fut>(
+        &mut self,
+        name: &'static str,
+        feature: Feature,
+        handler: F,
+    ) -> &mut Self
+    where
+        A: DeserializeOwned + JsonSchema + 'static,
+        E: std::fmt::Display,
+        F: Fn(Arc<M>, Ctx, A) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Vec<Message>, E>> + Send + 'static,
+    {
+        assert!(
+            self.prompts.iter().all(|p| p.prompt.name != name),
+            "prompt {name} is registered twice"
+        );
+        let mut schema = JsonObject::clone(&schema_for_type::<A>());
+        assert!(
+            is_object(&schema),
+            "the arguments of {name} must be a struct"
+        );
+        let description = take_text(&mut schema);
+        let arguments = arguments(&schema);
+        self.prompts.push(Promptable {
+            prompt: Prompt {
+                name,
+                feature,
+                description,
+                arguments,
+                schema: Arc::new(schema),
+            },
+            get: erase(handler, Ok),
+        });
+        self
+    }
+
+    /// Completes `argument` of `target`, a prompt's name or a resource
+    /// template's URI: the handler gets what the user typed so far and
+    /// returns suggestions. Gated by the target's feature.
+    ///
+    /// # Panics
+    ///
+    /// When `target` is not registered yet.
+    pub fn complete<E, F, Fut>(
+        &mut self,
+        target: &'static str,
+        argument: &'static str,
+        handler: F,
+    ) -> &mut Self
+    where
+        E: std::fmt::Display,
+        F: Fn(Arc<M>, Ctx, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Vec<String>, E>> + Send + 'static,
+    {
+        let known = self.prompts.iter().any(|p| p.prompt.name == target)
+            || self.resources.iter().any(|r| r.resource.uri == target);
+        assert!(known, "register {target} before completing it");
+        self.completers.push(Completer {
+            target,
+            argument,
+            complete: erase(handler, Ok),
+        });
+        self
+    }
+
     /// Tells hosts what they may assume about `tool`.
     ///
     /// # Panics
@@ -418,6 +544,30 @@ impl<M: Send + Sync + 'static> Ops<M> {
         });
         self
     }
+}
+
+/// A prompt's arguments: the properties of its arguments' schema.
+fn arguments(schema: &JsonObject) -> Vec<PromptArgument> {
+    let required = |name: &str| {
+        schema
+            .get("required")
+            .and_then(Value::as_array)
+            .is_some_and(|required| required.iter().any(|r| r == name))
+    };
+    let Some(Value::Object(properties)) = schema.get("properties") else {
+        return Vec::new();
+    };
+    properties
+        .iter()
+        .map(|(name, property)| PromptArgument {
+            name: name.clone(),
+            description: property
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            required: required(name),
+        })
+        .collect()
 }
 
 fn is_object(schema: &JsonObject) -> bool {

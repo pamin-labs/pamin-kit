@@ -11,7 +11,9 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::module::{Manifest, Module};
-use crate::ops::{APP_MIME, App, Body, Ctx, JsonObject, Ops, Progress, Resource, Tool};
+use crate::ops::{
+    APP_MIME, App, Body, Ctx, JsonObject, Message, Ops, Progress, Prompt, Resource, Tool,
+};
 use crate::seams::{
     Entitlements, Feature, Identity, Local, Metering, Open, Space, Unmetered, Usage,
 };
@@ -164,9 +166,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             feature,
             ..
         } = readable.resource;
-        if !self.entitlements.allows(&space, feature) {
-            return Err(CallError::NotEntitled(feature));
-        }
+        self.entitled(&space, feature)?;
         let variables = if found.params.is_empty() {
             Value::Null
         } else {
@@ -183,6 +183,94 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         let ctx = Ctx::new(space, caller.cancel, caller.progress);
         self.metered(template, feature, ctx, |ctx| {
             (readable.read)(self.core.module.clone(), ctx, variables)
+        })
+        .await
+        .map_err(CallError::Failed)
+    }
+
+    /// Whether the module completes any argument.
+    pub(crate) fn has_completions(&self) -> bool {
+        !self.core.ops.completers.is_empty()
+    }
+
+    /// Every registered prompt.
+    pub fn prompts(&self) -> impl Iterator<Item = &Prompt> {
+        self.core.ops.prompts.iter().map(|p| &p.prompt)
+    }
+
+    /// Fills prompt `name` from `arguments` for the caller holding `bearer`.
+    pub async fn prompt(
+        &self,
+        name: &str,
+        bearer: Option<&str>,
+        arguments: JsonObject,
+    ) -> Result<Vec<Message>, CallError> {
+        let caller = Caller {
+            bearer,
+            ..Caller::default()
+        };
+        self.prompt_as(name, caller, arguments).await
+    }
+
+    /// [`Self::prompt`] with everything the transport knows about the call.
+    pub(crate) async fn prompt_as(
+        &self,
+        name: &str,
+        caller: Caller<'_>,
+        arguments: JsonObject,
+    ) -> Result<Vec<Message>, CallError> {
+        let space = self.identify(caller.bearer).await?;
+        let promptable = self
+            .core
+            .ops
+            .prompts
+            .iter()
+            .find(|p| p.prompt.name == name)
+            .ok_or_else(|| CallError::Unknown(name.to_owned()))?;
+        let Prompt { name, feature, .. } = promptable.prompt;
+        self.entitled(&space, feature)?;
+        let ctx = Ctx::new(space, caller.cancel, caller.progress);
+        self.metered(name, feature, ctx, |ctx| {
+            (promptable.get)(self.core.module.clone(), ctx, Value::Object(arguments))
+        })
+        .await
+        .map_err(CallError::Failed)
+    }
+
+    /// Suggestions for `argument` of `target` (a prompt or a resource
+    /// template) starting from `typed`; none when the module completes it
+    /// not.
+    pub(crate) async fn complete_as(
+        &self,
+        target: &str,
+        argument: &str,
+        typed: String,
+        caller: Caller<'_>,
+    ) -> Result<Vec<String>, CallError> {
+        let space = self.identify(caller.bearer).await?;
+        let Some(completer) = self
+            .core
+            .ops
+            .completers
+            .iter()
+            .find(|c| c.target == target && c.argument == argument)
+        else {
+            return Ok(Vec::new());
+        };
+        let feature = self
+            .prompts()
+            .find(|p| p.name == target)
+            .map(|p| p.feature)
+            .or_else(|| {
+                self.resources()
+                    .find(|r| r.uri == target)
+                    .map(|r| r.feature)
+            })
+            .expect("Ops::complete checked the target");
+        self.entitled(&space, feature)?;
+        let ctx = Ctx::new(space, caller.cancel, caller.progress);
+        self.metered(completer.target, feature, ctx, |ctx| {
+            (completer.complete)(self.core.module.clone(), ctx, Value::String(typed))
         })
         .await
         .map_err(CallError::Failed)
@@ -317,6 +405,16 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
+    /// Whether `space` may use `feature`: the one entitlement check for
+    /// tools, resources, prompts and completions.
+    fn entitled(&self, space: &Space, feature: Feature) -> Result<(), CallError> {
+        if self.entitlements.allows(space, feature) {
+            Ok(())
+        } else {
+            Err(CallError::NotEntitled(feature))
+        }
+    }
+
     async fn identify(&self, bearer: Option<&str>) -> Result<Arc<Space>, CallError> {
         self.identity
             .identify(bearer)
@@ -342,10 +440,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             .iter()
             .position(|op| op.tool.name == name)
             .ok_or_else(|| CallError::Unknown(name.to_owned()))?;
-        let feature = self.core.ops.list[index].tool.feature;
-        if !self.entitlements.allows(&space, feature) {
-            return Err(CallError::NotEntitled(feature));
-        }
+        self.entitled(&space, self.core.ops.list[index].tool.feature)?;
         Ok((index, space))
     }
 

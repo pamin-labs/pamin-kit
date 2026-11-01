@@ -78,3 +78,33 @@ impl Module for Slow {
 fn a_long_running_manifest_without_tasks_fails() {
     pamin_kit::conformance::check(Slow, std::path::Path::new("examples/echo/SKILL.md"));
 }
+
+/// Prompts with a number, which MCP cannot pass.
+struct Counting;
+
+/// Counts to a number.
+#[derive(Deserialize, JsonSchema)]
+struct Count {
+    #[allow(dead_code)]
+    to: u32,
+}
+
+impl Module for Counting {
+    fn manifest(&self) -> Manifest {
+        Leaky.manifest()
+    }
+
+    fn register(&self, ops: &mut Ops<Self>) {
+        ops.prompt(
+            "count",
+            Feature::Core,
+            |_: Arc<Self>, _: Ctx, _: Count| async { Ok::<_, String>(Vec::new()) },
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "count: argument \"to\" is not a string")]
+fn a_prompt_argument_that_is_not_a_string_fails() {
+    pamin_kit::conformance::check(Counting, std::path::Path::new("examples/echo/SKILL.md"));
+}

@@ -3,6 +3,20 @@ source: tests/conformance.rs
 expression: tools
 ---
 {
+  "prompts": [
+    {
+      "arguments": [
+        {
+          "description": "Who to greet.",
+          "name": "name",
+          "required": true
+        }
+      ],
+      "description": "Starts a conversation about something to say.",
+      "feature": "core",
+      "name": "echo_greet"
+    }
+  ],
   "resources": [
     {
       "description": null,
