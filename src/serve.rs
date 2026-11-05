@@ -28,6 +28,7 @@ use rmcp::model::{
 };
 use rmcp::service::{RequestContext, RoleServer, SubscriptionContext};
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::kit::Reply;
@@ -139,6 +140,9 @@ pub(crate) struct Server<M, I, E, T, S> {
     kit: Arc<Kit<M, I, E, T, S>>,
     /// Built once: listing tools is the first thing every client does.
     tools: Arc<[rmcp::model::Tool]>,
+    /// Cancelled when the server shuts down, which ends every open
+    /// subscription so it does not hold the shutdown open.
+    stopping: CancellationToken,
 }
 
 impl<M, I, E, T, S> Clone for Server<M, I, E, T, S> {
@@ -146,6 +150,7 @@ impl<M, I, E, T, S> Clone for Server<M, I, E, T, S> {
         Self {
             kit: self.kit.clone(),
             tools: self.tools.clone(),
+            stopping: self.stopping.clone(),
         }
     }
 }
@@ -178,6 +183,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<
         Self {
             kit: Arc::new(kit),
             tools,
+            stopping: CancellationToken::new(),
         }
     }
 }
@@ -257,6 +263,9 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         loop {
             let changed = tokio::select! {
                 () = subscription.cancelled() => return Ok(()),
+                // Ending it sends the final result that tells the client the
+                // server is going away.
+                () = self.stopping.cancelled() => return Ok(()),
                 changed = changes.recv() => changed,
             };
             let changed = match changed {
@@ -936,11 +945,37 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     /// listener fails.
     ///
     /// Stateless: no session outlives a request, so any instance serves any
-    /// request.
+    /// request. [`Kit::serve_http_with_shutdown`] serves until a signal.
     pub async fn serve_http(
         self,
         listener: tokio::net::TcpListener,
         options: HttpOptions,
+    ) -> std::io::Result<()> {
+        self.serve_http_with_shutdown(listener, options, std::future::pending())
+            .await
+    }
+
+    /// Serves as [`Kit::serve_http`] does, and shuts down gracefully once
+    /// `signal` completes, such as on SIGTERM.
+    ///
+    /// When `signal` completes, the server stops accepting connections and
+    /// closes the listener. Requests already being served, including one
+    /// whose headers are still arriving, run to completion and get their
+    /// responses, each on a connection that then closes. A connection
+    /// between requests, such as an idle keep-alive one, closes at once. The
+    /// returned future resolves once every connection has closed.
+    ///
+    /// An open `subscriptions/listen` stream ends with its final result, as
+    /// MCP has a server that is going away do.
+    ///
+    /// Shutdown waits for in-flight requests without a limit: bound the wait
+    /// with a timeout if the process must exit by a deadline. Tasks (the MCP
+    /// tasks extension) run on in the background and are not waited for.
+    pub async fn serve_http_with_shutdown(
+        self,
+        listener: tokio::net::TcpListener,
+        options: HttpOptions,
+        signal: impl Future<Output = ()> + Send + 'static,
     ) -> std::io::Result<()> {
         use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
         use rmcp::transport::streamable_http_server::{
@@ -948,6 +983,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         };
         let server = Server::new(self);
         let kit = server.kit.clone();
+        let stopping = server.stopping.clone();
         let mut config = StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)
             .with_json_response(true);
@@ -984,7 +1020,12 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
                     .merge(mcp);
             }
         }
-        axum::serve(listener, router).await
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async move {
+                signal.await;
+                stopping.cancel();
+            })
+            .await
     }
 }
 
