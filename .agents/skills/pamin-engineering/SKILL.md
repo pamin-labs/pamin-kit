@@ -11,7 +11,7 @@ Every Pamin Labs repository holds code to the same bar: high performance, low re
 
 1. **Does it need to exist?** Build what a real caller needs now. No options, layers, traits or config for a second use that has not appeared; add them when it does.
 2. **Does it already exist here?** Search the repository (and the shared crates `pamin-runtime` and `pamin-kit`) for the same concern. Extend the owner of a concern through its interface; never add a parallel version with its own rules.
-3. **Does the standard library, then the platform, then a widely used maintained dependency cover it?** Write custom code only when none fits, and say why in the PR. Lock files pin every dependency to an exact version; a published library requires caret minimums instead, so its consumers can unify, and pins exactly only with a stated reason.
+3. **Does the official SDK of the service, then the standard library, then the platform, then a dependency already in the tree, then a widely used maintained dependency cover it?** Write custom code only when none fits, and say why in the PR's "Reused" section. Lock files pin every dependency to an exact version; a published library requires caret minimums instead, so its consumers can unify, and pins exactly only with a stated reason.
 
 ## Shape of the code
 
@@ -35,13 +35,14 @@ Every Pamin Labs repository holds code to the same bar: high performance, low re
 
 ## Before opening a PR
 
-- Branch `<type>/<slug>`, Conventional Commits, one logical change per commit, each building and passing on its own.
-- Run the repository's gates (listed in `AGENTS.md`) locally.
+- Branch `<type>/i-<number>-<slug>` from your pamin-labs-dev intent, Conventional Commits, one logical change per commit, each building and passing on its own.
+- Run the gates of every `AGENTS.md` the change touches, locally.
 - Rebase on the latest `main`; if `main` gained something overlapping, build on it and say what you reused.
-- The PR says what changed, how it was verified (with numbers when performance is involved), and any risk or follow-up.
+- Do the review before every PR that `AGENTS.md` describes: the whole diff against every rule, then the `pamin-labs-dev:peer-review` skill.
+- The PR says what changed, what it reused, how it was verified (with numbers when performance is involved), and any risk or follow-up.
 
 ## Language notes
 
-- **Rust:** edition and toolchain pinned in `rust-toolchain.toml`; `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test`; `cargo deny` for licences and bans; a shared `CARGO_TARGET_DIR` keeps disk use down; `debug = "line-tables-only"` in dev profiles.
+- **Rust:** edition and toolchain pinned in `rust-toolchain.toml`; `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test`; `cargo deny` for licences and bans; a shared `CARGO_TARGET_DIR` keeps disk use down; `debug = "line-tables-only"` in dev profiles. The `## Rust` and `## Performance` rules in the `AGENTS.md` that covers the repository's Rust code add to these.
 - **Zig:** compiler version pinned in the repository; `ReleaseSafe` for production; one arena allocator per request; `std.testing.allocator` in tests to catch leaks; fuzz parsers.
 - **TypeScript:** strict mode; Bun for installs and scripts; measure the shipped JavaScript and keep a budget; no dependency for what the platform already does (CSS over JavaScript, native elements over widgets).
