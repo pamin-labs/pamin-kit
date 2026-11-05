@@ -43,6 +43,23 @@ The bar is high performance, low resource use, fast builds, and clean, DRY, deco
 - Nothing module-specific enters the kit, and a feature enters only when a module needs it.
 - Per-call overhead (entitlement check, metering, dispatch) stays under its benchmarked budget.
 
+## Layout
+
+The crate is one project in one language, so this file holds all its rules. **A directory says what its code is:** this list names every module and folder by its path, with what it owns, and a new one is described here in the PR that adds it, never placed beside them without a line; no test reads this list yet, so review checks it.
+
+- `src/lib.rs`: the crate's documentation, its modules and its public re-exports.
+- `src/kit.rs`: a module with its seams, the one place every call is identified, checked, run and metered, whatever transport it arrived on.
+- `src/module.rs`: what a module is to the kit, its manifest and the operations it registers.
+- `src/ops.rs`: operation registration, schemas from contract types and handlers erased to one shape.
+- `src/seams.rs`: the identity, entitlement, metering and task seams, with their open-source defaults.
+- `src/serve.rs`: serving a `Kit` as MCP over stdio and Streamable HTTP; the only module that names `rmcp`.
+- `src/tasks.rs`: long operations as MCP tasks.
+- `src/trace.rs`: one span per MCP request, joined to the caller's trace with the `otel` feature.
+- `src/conformance.rs`: the checks every module runs in CI (`conformance!`).
+- `tests/`: integration tests through the public API, helpers in `tests/common/`, snapshots in `tests/snapshots/`; `benches/`: the per-call overhead benchmarks; `examples/`: a minimal module.
+
+Business logic lives in `src/kit.rs` and the seams it calls; `src/serve.rs` only adapts a transport to it, and a rule found there is a bug.
+
 ## Review before every PR
 
 Before a PR opens, go through its whole diff, tests included, against each rule of every `AGENTS.md` the change touches and the `pamin-engineering` skill, and fix what misses in new commits; then run the `pamin-labs-dev:peer-review` skill and put its verdict and findings under the PR's verification. Work an agent delegated is reviewed the same way: the agent that opens the PR reads its diff and tests itself and never accepts them on the delegate's report alone.
