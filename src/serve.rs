@@ -936,11 +936,36 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     /// listener fails.
     ///
     /// Stateless: no session outlives a request, so any instance serves any
-    /// request.
+    /// request. [`Kit::serve_http_with_shutdown`] serves until a signal.
     pub async fn serve_http(
         self,
         listener: tokio::net::TcpListener,
         options: HttpOptions,
+    ) -> std::io::Result<()> {
+        self.serve_http_with_shutdown(listener, options, std::future::pending())
+            .await
+    }
+
+    /// Serves as [`Kit::serve_http`] does, and shuts down gracefully once
+    /// `signal` completes, such as on SIGTERM.
+    ///
+    /// When `signal` completes, the server stops accepting connections and
+    /// closes the listener. Requests already being served, including one
+    /// whose headers are still arriving, run to completion and get their
+    /// responses, each on a connection that then closes. A connection
+    /// between requests, such as an idle keep-alive one, closes at once. The
+    /// returned future resolves once every connection has closed.
+    ///
+    /// Shutdown waits for in-flight requests without a limit, and an open
+    /// `subscriptions/listen` stream is one until its client ends it: bound
+    /// the wait with a timeout if the process must exit by a deadline. Tasks
+    /// (the MCP tasks extension) run on in the background and are not
+    /// waited for.
+    pub async fn serve_http_with_shutdown(
+        self,
+        listener: tokio::net::TcpListener,
+        options: HttpOptions,
+        signal: impl Future<Output = ()> + Send + 'static,
     ) -> std::io::Result<()> {
         use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
         use rmcp::transport::streamable_http_server::{
@@ -984,7 +1009,9 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
                     .merge(mcp);
             }
         }
-        axum::serve(listener, router).await
+        axum::serve(listener, router)
+            .with_graceful_shutdown(signal)
+            .await
     }
 }
 
