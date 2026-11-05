@@ -60,6 +60,65 @@ The crate is one project in one language, so this file holds all its rules. **A 
 
 Business logic lives in `src/kit.rs` and the seams it calls; `src/serve.rs` only adapts a transport to it, and a rule found there is a bug.
 
+## Layers, domains and decoupling
+
+These rules are shared word for word by every Pamin Labs repository. Each came from a defect found in an audit of Tala's server on 2026-11-03, and each stops that defect from coming back. Each project's `AGENTS.md` names its own layers and the tests that check them.
+
+- **Layers point one way.** Code is layered by concern: entry, wiring, transport, domain, then store and integrations, then values. Dependencies point only from left to right, and nothing points back up. A test fails when one does:
+  - in a Rust workspace, a test that reads `cargo metadata`;
+  - in a single crate, a test over its modules' `use` paths;
+  - in Go, the import test.
+
+  A new module or crate goes in its layer's directory, never beside the layers.
+- **Transport only translates.** A handler, middleware or CLI command does three things: it parses the request into types, calls one domain function, and shapes that function's result as the API's own types. A business rule in transport is a bug, and that includes refusals, quotas, limits, metering decisions and checks of any kind. A middleware may read the request, but it calls the function that decides, and that function declares the error.
+- **Transport never reaches the store.** It uses no call, type or error from it. Even a domain function that only passes a call through is worth having, so that a rule added later has one place to go.
+- **Each layer converts at its edge.** Row types never leave the store. The store returns its own plain read types, the domain converts them to its own types, and the API converts the domain's types to its own wire types. A schema change then fails to compile at a conversion instead of silently changing the API. A domain's public functions and fields take and return the domain's own types, never store or row types; the only store type a domain shows is the store handle it is built with. A type several domains and the store share is a value, not a store type.
+- **Errors are declared once, with their kind and code, in the domain that owns them.** Transport answers any declared error by its kind, with no table that lists every domain's errors. A store error that transport must act on is mapped by the domain to its own error, so transport never names the store's errors.
+- **A domain owns its data.** A domain calls another domain's service, never that domain's queries or tables, and the caller's domain orchestrates cross-domain work, not the store. Each store function is called from one domain only, and a test fails otherwise.
+- **A domain module holds its service, its types, its errors and its rules.** It depends only on the store, on integrations through traits or interfaces it declares, and on other domains' services. It never imports an HTTP framework, MCP transport code or the API layer.
+- **Wiring is in one place.** The entry point or app module builds each service once and hands each transport the services it uses. Every background task is domain code run on a schedule, under the same rules, and it is owned by the wiring that awaits it at shutdown.
+- **Each handler group sees only its own services.** An API is not one handler holding every dependency. Each business area registers its own operations in its own file and receives only its own service and the caller's identity.
+- **Traits and interfaces are declared by their consumer,** with only the methods it calls. Functions return concrete types.
+- **One definition per concern.** Each rule, constant, limit, price, page size, setting name, header, path or schema has one definition, in the module that owns it, and everything else imports it. Before adding a helper, search for one. A second copy of a loop over an SDK is a bug: put one helper per repeated SDK flow in its integration module.
+- **A rule is computed in one function,** and another domain calls that function rather than restating the rule. What a client must do first is that function's answer, not a set of flags the client has to order.
+- **A counter and its refusal come from one function.** What a caller is told it has left must agree with what is refused. The "left" figure asks the same function that refuses, and a test checks that the two agree.
+- **A closed set of values is one named type with one list.** Wire enums and schemas are built from that list, never written again in a tag or a string, and a test checks the list against the database's check constraint. A store value is never a wire name.
+- **Modules are named for what they hold.** Names like `utils`, `common`, `models` and `helpers` are not allowed. Each module covers one concern with a small public surface and is private by default. A file covers one business area, not one type. Within a file the order is:
+  1. imports;
+  2. constants and statics;
+  3. types;
+  4. constructors;
+  5. methods grouped by type, public first;
+  6. plain helpers, in rough call order.
+
+  A type is declared before the code that uses it.
+- **Writes are safe to repeat.** A write that a client or a retry may send twice is idempotent: a repeat returns what the first one stored and changes nothing more. A write that also reaches another service calls that service outside the transaction, and is safe to try again, with that service's "not found" counting as done. Steps are ordered so that a failure part way leaves no gap.
+- **Per-transaction state only.** A deployed PostgreSQL may sit behind a transaction-pooling proxy such as PlanetScale's PgBouncer, so a connection belongs to the code for one transaction only. Use `set local` or `set_config(name, value, true)`, and protocol-level prepared statements. Never use:
+  - a session `set`, or `set_config(..., false)`, meant to outlast its transaction;
+  - session advisory locks (use `pg_advisory_xact_lock` instead);
+  - `LISTEN`/`NOTIFY`;
+  - temporary tables;
+  - SQL `PREPARE`;
+  - cursors held across transactions.
+
+  Test fixtures may use these.
+- **State kept per user, tenant or key beyond a request is bounded,** like a rate limiter's buckets or a cache. Use a bounded structure with eviction, never a map pruned by hand. Per-user work that must be serialised is serialised in the database (a lease or row lock), not in one instance's memory, so instances stay stateless.
+- **Hot paths keep their database round trips flat.** A request's round trips do not grow with the size of a user's data: no `count(*)`, `offset` or `max()` over a growing set per request. Keep counters, use keyset pagination with indexes that match each query, and batch independent reads.
+- **Parse once.** Large values such as manifests, schemas, prompts and models are parsed once and cached by version in a bounded cache, never copied per request. Answers are streamed rather than buffered when they can be.
+
+### Layers here
+
+The kit is one crate, so its layers are modules under "Layout" above, and their `use` paths point one way: `serve` → `kit` → `module`, `ops` and `tasks` → `seams`.
+
+- **Entry and wiring:** none in the crate; a module's own binary builds its `Kit` with the seams it chooses and serves it (`examples/`).
+- **Transport:** `src/serve.rs`, MCP over stdio and Streamable HTTP; the only module that names `rmcp`.
+- **Domain:** `src/kit.rs` (identify, check, run and meter every call), `src/module.rs`, `src/ops.rs` and `src/tasks.rs`.
+- **Integrations:** `src/seams.rs`, the traits the kit declares for identity, entitlements, metering and the task store, with their open-source defaults; a host implements them.
+- **Store:** none; there is no database here, and a task store is a seam its host implements, so the store rules have no subject in this crate.
+- **Beside the layers:** `src/conformance.rs` (checks a module runs through the public API) and `src/trace.rs` (one span per MCP request, used by transport).
+
+Checks: the test over the modules' `use` paths that fails when a layer points back up is not yet written; on the roadmap. The one-store-function-one-domain test has no subject here.
+
 ## Rust
 
 These rules are the same in every Pamin Labs Rust repository; change them in all of them together.
