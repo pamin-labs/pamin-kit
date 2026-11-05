@@ -28,6 +28,7 @@ use rmcp::model::{
 };
 use rmcp::service::{RequestContext, RoleServer, SubscriptionContext};
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::kit::Reply;
@@ -139,6 +140,9 @@ pub(crate) struct Server<M, I, E, T, S> {
     kit: Arc<Kit<M, I, E, T, S>>,
     /// Built once: listing tools is the first thing every client does.
     tools: Arc<[rmcp::model::Tool]>,
+    /// Cancelled when the server shuts down, which ends every open
+    /// subscription so it does not hold the shutdown open.
+    stopping: CancellationToken,
 }
 
 impl<M, I, E, T, S> Clone for Server<M, I, E, T, S> {
@@ -146,6 +150,7 @@ impl<M, I, E, T, S> Clone for Server<M, I, E, T, S> {
         Self {
             kit: self.kit.clone(),
             tools: self.tools.clone(),
+            stopping: self.stopping.clone(),
         }
     }
 }
@@ -178,6 +183,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Server<
         Self {
             kit: Arc::new(kit),
             tools,
+            stopping: CancellationToken::new(),
         }
     }
 }
@@ -257,6 +263,9 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> ServerH
         loop {
             let changed = tokio::select! {
                 () = subscription.cancelled() => return Ok(()),
+                // Ending it sends the final result that tells the client the
+                // server is going away.
+                () = self.stopping.cancelled() => return Ok(()),
                 changed = changes.recv() => changed,
             };
             let changed = match changed {
@@ -956,11 +965,12 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
     /// between requests, such as an idle keep-alive one, closes at once. The
     /// returned future resolves once every connection has closed.
     ///
-    /// Shutdown waits for in-flight requests without a limit, and an open
-    /// `subscriptions/listen` stream is one until its client ends it: bound
-    /// the wait with a timeout if the process must exit by a deadline. Tasks
-    /// (the MCP tasks extension) run on in the background and are not
-    /// waited for.
+    /// An open `subscriptions/listen` stream ends with its final result, as
+    /// MCP has a server that is going away do.
+    ///
+    /// Shutdown waits for in-flight requests without a limit: bound the wait
+    /// with a timeout if the process must exit by a deadline. Tasks (the MCP
+    /// tasks extension) run on in the background and are not waited for.
     pub async fn serve_http_with_shutdown(
         self,
         listener: tokio::net::TcpListener,
@@ -973,6 +983,7 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
         };
         let server = Server::new(self);
         let kit = server.kit.clone();
+        let stopping = server.stopping.clone();
         let mut config = StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)
             .with_json_response(true);
@@ -1010,7 +1021,10 @@ impl<M: Module, I: Identity, E: Entitlements, T: Metering, S: TaskStore> Kit<M, 
             }
         }
         axum::serve(listener, router)
-            .with_graceful_shutdown(signal)
+            .with_graceful_shutdown(async move {
+                signal.await;
+                stopping.cancel();
+            })
             .await
     }
 }

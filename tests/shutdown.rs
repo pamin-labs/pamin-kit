@@ -142,3 +142,31 @@ async fn an_idle_keep_alive_connection_does_not_hold_shutdown() {
     let after = read_until(&mut stream, |_| false).await;
     assert!(after.is_empty(), "{after}");
 }
+
+#[tokio::test]
+async fn an_open_subscription_ends_when_the_signal_fires() {
+    let (address, server, stop) = serve().await;
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    let listen = request(
+        "ada",
+        false,
+        "subscriptions/listen",
+        json!({"notifications": {"resourceSubscriptions": ["echo://say/hi"]}}),
+        "keep-alive",
+    );
+    stream.write_all(listen.as_bytes()).await.unwrap();
+    // The acknowledgment: the subscription is up.
+    let opened = read_until(&mut stream, |seen| seen.contains("\n\n")).await;
+    assert!(opened.starts_with("HTTP/1.1 200"), "{opened}");
+
+    stop.send(()).unwrap();
+    // The final result that marks a graceful teardown, then the server
+    // closes the connection.
+    let rest = read_until(&mut stream, |_| false).await;
+    assert!(rest.contains(r#""result":"#), "{rest}");
+    tokio::time::timeout(BOUND, server)
+        .await
+        .expect("an open subscription held the server open")
+        .unwrap()
+        .unwrap();
+}
