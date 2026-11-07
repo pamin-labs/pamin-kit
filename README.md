@@ -73,6 +73,8 @@ The arguments type's doc comment becomes the tool's description, its fields the 
 
 [`examples/echo`](examples/echo/main.rs) uses every feature below, and the kit's tests run against it.
 
+A host that reads a module's manifest back from JSON parses it as `Manifest<String, ModuleName>`, whose name follows `ModuleName`, the rule the conformance suite holds every module to.
+
 ## Operations
 
 Everything is registered on `Ops` in `Module::register`, and each registration returns `&mut Ops` to chain.
@@ -141,7 +143,7 @@ fn conforms() {
 }
 ```
 
-It fails the test when a schema is not valid JSON Schema 2020-12, an argument or template variable names a tenant, user or project, a call without identity is not refused, `SKILL.md` misses a tool, prompt arguments are not strings, `long_running` disagrees with the task operations, or a name breaks the convention: the module in lowercase letters and digits, tools and prompts `<module>_<action>`, resources under `<module>://`, app pages under `ui://<module>/`. It then snapshots the tools, resources and prompts as served with `insta`, so a contract change shows in review.
+It fails the test when a schema is not valid JSON Schema 2020-12, an argument or template variable names a tenant, user or project, a call without identity is not refused, `SKILL.md` misses a tool, prompt arguments are not strings, `long_running` disagrees with the task operations, or a name breaks the convention: the module named as `ModuleName` says, tools and prompts `<module>_<action>`, resources under `<module>://`, app pages under `ui://<module>/`. It then snapshots the tools, resources and prompts as served with `insta`, so a contract change shows in review.
 
 ## Cargo features
 

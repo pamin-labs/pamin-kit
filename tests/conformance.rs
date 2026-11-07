@@ -134,3 +134,23 @@ impl Module for Sloppy {
 fn a_tool_outside_the_naming_convention_fails() {
     pamin_kit::conformance::check(Sloppy, std::path::Path::new("examples/echo/SKILL.md"));
 }
+
+/// Named with a leading digit, which the module-name rule refuses.
+struct Numbered;
+
+impl Module for Numbered {
+    fn manifest(&self) -> Manifest {
+        Manifest {
+            name: "9notes",
+            ..Leaky.manifest()
+        }
+    }
+
+    fn register(&self, _: &mut Ops<Self>) {}
+}
+
+#[test]
+#[should_panic(expected = "module name \"9notes\" is not a lowercase letter")]
+fn a_module_outside_the_naming_convention_fails() {
+    pamin_kit::conformance::check(Numbered, std::path::Path::new("examples/echo/SKILL.md"));
+}
