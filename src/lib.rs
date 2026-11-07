@@ -24,7 +24,7 @@ mod trace;
 pub struct ReadmeDoctests;
 
 pub use kit::{CallError, Kit, Reply};
-pub use module::{Audience, Hardware, Manifest, Module, Routing};
+pub use module::{Audience, BadModuleName, Hardware, Manifest, Module, ModuleName, Routing};
 pub use ops::{
     App, Ask, Body, Completing, Content, Ctx, Form, Hints, Icon, JsonObject, Looks, Message,
     NeedsInput, Ops, Prompt, PromptArgument, Resource, Role, Tool,

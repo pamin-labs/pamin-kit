@@ -34,7 +34,7 @@ The crate is one project in one language, so this file and the references it imp
 
 - `src/lib.rs`: the crate's documentation, its modules and its public re-exports.
 - `src/kit.rs`: a module with its seams, the one place every call is identified, checked, run and metered, whatever transport it arrived on.
-- `src/module.rs`: what a module is to the kit, its manifest and the operations it registers.
+- `src/module.rs`: what a module is to the kit, its manifest, the operations it registers and the module-name rule (`ModuleName`).
 - `src/ops.rs`: operation registration, schemas from contract types and handlers erased to one shape.
 - `src/seams.rs`: the identity, entitlement, metering and task seams, with their open-source defaults.
 - `src/serve.rs`: serving a `Kit` as MCP over stdio and Streamable HTTP; the only module that names `rmcp`.

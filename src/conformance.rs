@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 pub use insta;
 
 use crate::kit::{CallError, Kit};
-use crate::module::Module;
+use crate::module::{Module, ModuleName, name_char};
 use crate::ops::JsonObject;
 use crate::seams::{Feature, Identity, Space};
 
@@ -174,8 +174,8 @@ fn feature(feature: Feature) -> &'static str {
 }
 
 /// Where names break the convention every module follows, so that hosts
-/// and models see one shape across modules: a module named in lowercase
-/// letters and digits; tools and prompts named `<module>_<action>` in
+/// and models see one shape across modules: a module named as
+/// [`ModuleName`] says; tools and prompts named `<module>_<action>` in
 /// snake case (and valid MCP tool names); resources under `<module>://`;
 /// app pages under `ui://<module>/`.
 fn naming<M: Module, I, E, T, S>(kit: &Kit<M, I, E, T, S>) -> Vec<String>
@@ -187,11 +187,8 @@ where
 {
     let module = kit.manifest().name;
     let mut failures = Vec::new();
-    let lower = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
-    if !module.starts_with(|c: char| c.is_ascii_lowercase()) || !module.chars().all(lower) {
-        failures.push(format!(
-            "module name {module:?} is not lowercase letters and digits"
-        ));
+    if let Err(bad) = ModuleName::try_from(module.to_owned()) {
+        failures.push(bad.to_string());
     }
     let prefix = format!("{module}_");
     let snake = |name: &str| {
@@ -199,7 +196,7 @@ where
             !action.is_empty()
                 && !action.starts_with('_')
                 && !action.ends_with('_')
-                && action.chars().all(|c| lower(c) || c == '_')
+                && action.chars().all(|c| name_char(c) || c == '_')
         })
     };
     for tool in kit.tools() {
