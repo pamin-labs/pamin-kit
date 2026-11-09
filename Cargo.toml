@@ -1,7 +1,7 @@
 [package]
 name = "pamin-kit"
 description = "The framework every Pamin module is built on: the Module trait, operation registration with entitlements, MCP serving over stdio and Streamable HTTP, and a conformance suite."
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.98.1"
 license = "Apache-2.0"
