@@ -26,3 +26,14 @@ multiple-versions = "allow"
 # Check the optional features too: http, otel and conformance bring crates
 # the default build does not.
 all-features = true
+
+[advisories]
+ignore = [
+    # chrono is unmaintained (informational, no patched version). rmcp, which
+    # the kit pins, depends on it unconditionally up to 3.11.0 and turns on
+    # schemars' chrono support, so it stays in the graph whatever the kit
+    # does; the kit's own use (an RFC 3339 timestamp in serve.rs) adds no
+    # crate. Remove this once rmcp drops chrono, and move the kit to jiff or
+    # time then.
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; rmcp requires it" },
+]
