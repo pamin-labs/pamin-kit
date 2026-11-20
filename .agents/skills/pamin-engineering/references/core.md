@@ -1,6 +1,6 @@
 # Core engineering rules
 
-Every repository that imports this file holds its code to these rules, whatever the language. The bar: high performance, low resource use, fast builds, and clean, DRY, decoupled code that is easy to maintain and extend. Each repository's `AGENTS.md` names its layers, how it meets these rules and the tests that check them; a language's reference adds only that language's mechanisms. This file is identical in every repository that carries it; change it in all of them together.
+Every repository that imports this file holds its code to these rules, whatever the language. The bar: high performance, low resource use, fast builds, and clean, DRY, decoupled code that is easy to maintain and extend. Each repository's `AGENTS.md` names its layers, how it meets these rules and the tests that check them; a language's reference adds only that language's mechanisms. Its source is the public `pamin-labs/skills` repository; repositories install it with the skills CLI and change it only there.
 
 ## Before writing anything
 

@@ -36,7 +36,7 @@ Read every reference the change touches, before writing and again before the PR 
 ## When the reference and the repository disagree
 
 - A repository's `AGENTS.md` says how it meets each rule and what it has not built yet; it never weakens a rule, and a gap it names is no licence to widen: new code follows the rule.
-- A rule that seems wrong for a case is raised with the owner and recorded in a decision record, then changed in `references/` in every repository together; never work around it in code.
+- A rule that seems wrong for a case is raised with the owner and recorded in a decision record, then changed in `pamin-labs/skills`; never work around it in code.
 
 ## Reviewing a change and opening the PR
 
@@ -50,4 +50,4 @@ Follow `core.md`'s "Working and review" and "Commits and PRs": rebase and build 
 
 ## Changing these rules
 
-`references/` is identical in every repository that carries this skill. A change is made in all of them together, cites its decision record, and adds no repository-specific fact; those stay in the repository's `AGENTS.md`.
+This skill's source is the public `pamin-labs/skills` repository; a repository installs it with the skills CLI and never edits its copy. A change is made there, cites its decision record, and adds no repository-specific fact; those stay in the repository's `AGENTS.md`.

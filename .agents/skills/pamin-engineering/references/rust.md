@@ -1,6 +1,6 @@
 # Rust
 
-How Rust code meets `core.md` and `performance.md`; read those first. This file is the same in every Rust repository that carries it; change it in all of them together.
+How Rust code meets `core.md` and `performance.md`; read those first. Like the rest of this skill, it changes only in `pamin-labs/skills`.
 
 ## Toolchain and build
 
