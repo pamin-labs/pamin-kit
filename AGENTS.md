@@ -14,6 +14,8 @@ You must follow `.agents/skills/pamin-engineering/references/core.md`: @.agents/
 You must follow `.agents/skills/pamin-engineering/references/rust.md`: @.agents/skills/pamin-engineering/references/rust.md
 You must follow `.agents/skills/pamin-engineering/references/performance.md`: @.agents/skills/pamin-engineering/references/performance.md
 
+`data.md` (storage, queries, migrations) is not imported: the framework stores no data of its own: identity, entitlement, metering and task state live behind seams the module or host implements, so a module that stores data imports `data.md` itself.
+
 - This crate is a library, so `core.md`'s rule for published libraries applies; it pins `rmcp` exactly, for the reason in InternalDocs `pamin-platform/decisions/2026-11-01-library-dependency-requirements.md`.
 - The kit is the only crate in the system that names `rmcp`; an MCP specification or SDK change happens here once.
 - Nothing module-specific enters the kit, and a feature enters only when a module needs it.
